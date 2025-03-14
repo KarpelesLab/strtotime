@@ -14,7 +14,7 @@ func parseWithTimezone(str string, loc *time.Location) (time.Time, bool) {
 
 	// Regular expression to match month name, day, year, optional time, and timezone
 	// The timezone can be a 3-letter code, a full region/city name, or any valid IANA timezone
-	re := regexp.MustCompile(`^([a-zA-Z]+)\s+(\d{1,2})(?:st|nd|rd|th)?\s+(\d{4})(?:\s+(\d{1,2}):(\d{1,2})(?::(\d{1,2}))?)?\s+([a-zA-Z0-9/_]+)$`)
+	re := regexp.MustCompile(`^([a-zA-Z]+)\s+(\d{1,2})(?:st|nd|rd|th)?\s+(\d{4})(?:\s+(\d{1,2}):(\d{1,2})(?::(\d{1,2}))?)?\s+([a-zA-Z0-9/_.]+)$`)
 	if matches := re.FindStringSubmatch(str); matches != nil {
 		// Extract components
 		monthName := matches[1]
