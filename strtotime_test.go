@@ -105,6 +105,10 @@ func TestStrToTime(t *testing.T) {
 		// Month names with no comma
 		"Jan 15 2023",
 		"Feb 28 2023",
+		
+		// Month names with ordinal suffix
+		"April 4th",
+		"December 25th",
 
 		// Case insensitivity tests
 		"TOMORROW",

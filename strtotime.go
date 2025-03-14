@@ -201,6 +201,17 @@ func (p *Parser) Parse() (time.Time, error) {
 				parsed = true
 			}
 		}
+		
+		// Try month only format (e.g., "January" or "Feb")
+		if !parsed {
+			if t, ok, err := p.tryParseMonthOnlyFormat(); ok {
+				if err != nil {
+					return time.Time{}, err
+				}
+				p.result = t
+				parsed = true
+			}
+		}
 
 		// Try month name format
 		if !parsed {
@@ -516,7 +527,49 @@ func (p *Parser) tryParseRelativeTime() (time.Time, bool, error) {
 	}
 }
 
-// tryParseMonthNameFormat attempts to parse expressions like "January 15 2023" or "Jan 15, 2023"
+// tryParseMonthOnlyFormat attempts to parse just a month name like "January" or "Feb"
+func (p *Parser) tryParseMonthOnlyFormat() (time.Time, bool, error) {
+	if p.position >= len(p.tokens) {
+		return time.Time{}, false, nil
+	}
+
+	// Check if this is actually a month name followed by a day
+	// If it is, we should let tryParseMonthNameFormat handle it
+	if p.position+1 < len(p.tokens) {
+		nextToken := p.tokens[p.position+1]
+		// If next token is a number, this might be "Month Day" format
+		if nextToken.Typ == TypeNumber {
+			return time.Time{}, false, nil
+		}
+		// Or if it's whitespace followed by a number, it might be "Month Day" with space
+		if nextToken.Typ == TypeWhitespace && p.position+2 < len(p.tokens) && 
+		   p.tokens[p.position+2].Typ == TypeNumber {
+			return time.Time{}, false, nil
+		}
+	}
+
+	// Check for a month name
+	monthToken := p.tokens[p.position]
+	if monthToken.Typ != TypeString {
+		return time.Time{}, false, nil
+	}
+
+	month, ok := getMonthByName(monthToken.Val)
+	if !ok {
+		return time.Time{}, false, nil
+	}
+	
+	// Consume the month token
+	p.position++
+	
+	// Use the current year and day 1 of the given month
+	year := p.result.Year()
+	day := 1
+	
+	return time.Date(year, month, day, 0, 0, 0, 0, p.loc), true, nil
+}
+
+// tryParseMonthNameFormat attempts to parse expressions like "January 15 2023", "Jan 15, 2023", or "April 4th"
 func (p *Parser) tryParseMonthNameFormat() (time.Time, bool, error) {
 	if p.position >= len(p.tokens) {
 		return time.Time{}, false, nil
@@ -550,6 +603,15 @@ func (p *Parser) tryParseMonthNameFormat() (time.Time, bool, error) {
 		return time.Time{}, false, fmt.Errorf("invalid day number: %s", dayToken.Val)
 	}
 	p.position++
+	
+	// Check for ordinal suffix (like "th", "st", "nd", "rd")
+	if p.position < len(p.tokens) && p.tokens[p.position].Typ == TypeString {
+		suffix := strings.ToLower(p.tokens[p.position].Val)
+		if suffix == "st" || suffix == "nd" || suffix == "rd" || suffix == "th" {
+			// Skip the ordinal suffix
+			p.position++
+		}
+	}
 
 	// Skip optional punctuation (comma) and whitespace
 	if p.position < len(p.tokens) && p.tokens[p.position].Typ == TypePunctuation {
@@ -557,21 +619,20 @@ func (p *Parser) tryParseMonthNameFormat() (time.Time, bool, error) {
 	}
 	p.skipWhitespace()
 
-	// Check for year
-	if p.position >= len(p.tokens) {
-		return time.Time{}, false, fmt.Errorf("expected year after day number")
+	// Check for year (optional - if not present, use current year)
+	year := p.result.Year() // Default to current year
+	
+	if p.position < len(p.tokens) {
+		yearToken := p.tokens[p.position]
+		if yearToken.Typ == TypeNumber {
+			yearVal, err := strconv.Atoi(yearToken.Val)
+			if err != nil {
+				return time.Time{}, false, fmt.Errorf("invalid year: %s", yearToken.Val)
+			}
+			year = yearVal
+			p.position++
+		}
 	}
-
-	yearToken := p.tokens[p.position]
-	if yearToken.Typ != TypeNumber {
-		return time.Time{}, false, fmt.Errorf("expected year after day number, got %s", yearToken.Val)
-	}
-
-	year, err := strconv.Atoi(yearToken.Val)
-	if err != nil {
-		return time.Time{}, false, fmt.Errorf("invalid year: %s", yearToken.Val)
-	}
-	p.position++
 
 	return time.Date(year, month, day, 0, 0, 0, 0, p.loc), true, nil
 }
