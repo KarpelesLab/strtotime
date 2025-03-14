@@ -176,46 +176,72 @@ func StrToTime(str string, opts ...Option) (time.Time, error) {
 		}
 	}
 
-	// Handle "next {dayofweek}" and "last {dayofweek}"
-	reNextDay := regexp.MustCompile(`^next\s+(\w+)$`)
-	reLastDay := regexp.MustCompile(`^last\s+(\w+)$`)
+	// Handle "next {unit}" and "last {unit}" patterns
+	reNextUnit := regexp.MustCompile(`^next\s+(\w+)$`)
+	reLastUnit := regexp.MustCompile(`^last\s+(\w+)$`)
 
-	if matches := reNextDay.FindStringSubmatch(str); len(matches) == 2 {
-		targetDay := getDayOfWeek(matches[1])
-		if targetDay < 0 {
-			return time.Time{}, errors.New("unknown day of week: " + matches[1])
+	if matches := reNextUnit.FindStringSubmatch(str); len(matches) == 2 {
+		unit := matches[1]
+
+		// Check if it's a day of week
+		targetDay := getDayOfWeek(unit)
+		if targetDay >= 0 {
+			// Current day of week (0 = Sunday, 6 = Saturday)
+			currentDay := int(now.Weekday())
+			// Days until the next occurrence of targetDay
+			daysUntil := (targetDay - currentDay + 7) % 7
+			if daysUntil == 0 {
+				daysUntil = 7 // If today is the target day, go to next week
+			}
+
+			nextDayTime := now.AddDate(0, 0, daysUntil)
+			year, month, day := nextDayTime.Date()
+			return time.Date(year, month, day, 0, 0, 0, 0, loc), nil
 		}
 
-		// Current day of week (0 = Sunday, 6 = Saturday)
-		currentDay := int(now.Weekday())
-		// Days until the next occurrence of targetDay
-		daysUntil := (targetDay - currentDay + 7) % 7
-		if daysUntil == 0 {
-			daysUntil = 7 // If today is the target day, go to next week
+		// Handle other time units
+		switch unit {
+		case "month":
+			// Next month, same day and time
+			return now.AddDate(0, 1, 0), nil
+		case "year":
+			// Next year, same day and time
+			return now.AddDate(1, 0, 0), nil
+		default:
+			return time.Time{}, errors.New("unknown time unit for 'next': " + unit)
 		}
-
-		nextDayTime := now.AddDate(0, 0, daysUntil)
-		year, month, day := nextDayTime.Date()
-		return time.Date(year, month, day, 0, 0, 0, 0, loc), nil
 	}
 
-	if matches := reLastDay.FindStringSubmatch(str); len(matches) == 2 {
-		targetDay := getDayOfWeek(matches[1])
-		if targetDay < 0 {
-			return time.Time{}, errors.New("unknown day of week: " + matches[1])
+	if matches := reLastUnit.FindStringSubmatch(str); len(matches) == 2 {
+		unit := matches[1]
+
+		// Check if it's a day of week
+		targetDay := getDayOfWeek(unit)
+		if targetDay >= 0 {
+			// Current day of week (0 = Sunday, 6 = Saturday)
+			currentDay := int(now.Weekday())
+			// Days since the last occurrence of targetDay
+			daysSince := (currentDay - targetDay + 7) % 7
+			if daysSince == 0 {
+				daysSince = 7 // If today is the target day, go to previous week
+			}
+
+			lastDayTime := now.AddDate(0, 0, -daysSince)
+			year, month, day := lastDayTime.Date()
+			return time.Date(year, month, day, 0, 0, 0, 0, loc), nil
 		}
 
-		// Current day of week (0 = Sunday, 6 = Saturday)
-		currentDay := int(now.Weekday())
-		// Days since the last occurrence of targetDay
-		daysSince := (currentDay - targetDay + 7) % 7
-		if daysSince == 0 {
-			daysSince = 7 // If today is the target day, go to previous week
+		// Handle other time units
+		switch unit {
+		case "month":
+			// Last month, same day and time
+			return now.AddDate(0, -1, 0), nil
+		case "year":
+			// Last year, same day and time
+			return now.AddDate(-1, 0, 0), nil
+		default:
+			return time.Time{}, errors.New("unknown time unit for 'last': " + unit)
 		}
-
-		lastDayTime := now.AddDate(0, 0, -daysSince)
-		year, month, day := lastDayTime.Date()
-		return time.Date(year, month, day, 0, 0, 0, 0, loc), nil
 	}
 
 	// Try to parse standard date formats

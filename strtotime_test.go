@@ -116,6 +116,16 @@ func TestStrToTime(t *testing.T) {
 		" tomorrow ",
 		"   next   monday   ",
 		"+1     day",
+
+		// Next/Last time units
+		"next month",
+		"next year",
+		"last month",
+		"last year",
+
+		// Mixed case for next/last
+		"Next Month",
+		"LAST YEAR",
 	}
 
 	// First get PHP's timezone
