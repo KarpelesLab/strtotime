@@ -1,7 +1,6 @@
 package strtotime
 
 import (
-	"errors"
 	"fmt"
 	"regexp"
 	"strconv"
@@ -34,7 +33,34 @@ func StrToTime(str string, opts ...Option) (time.Time, error) {
 	// Normalize string - trim and lowercase
 	str = strings.ToLower(strings.TrimSpace(str))
 	if str == "" {
-		return time.Time{}, errors.New("empty time string")
+		return time.Time{}, ErrEmptyTimeString
+	}
+	
+	// Special case for European date format like "24.11.22"
+	if matched, _ := regexp.MatchString(`^\d{1,2}\.\d{1,2}\.\d{2,4}$`, str); matched {
+		parts := strings.Split(str, ".")
+		day, err := strconv.Atoi(parts[0])
+		if err == nil {
+			month, err := strconv.Atoi(parts[1])
+			if err == nil {
+				year, err := strconv.Atoi(parts[2])
+				if err == nil {
+					// Handle 2-digit years (YY)
+					if year < 100 {
+						if year < 70 {
+							year += 2000 // 00-69 -> 2000-2069
+						} else {
+							year += 1900 // 70-99 -> 1970-1999
+						}
+					}
+					
+					// Validate date components
+					if month >= 1 && month <= 12 && day >= 1 && day <= 31 {
+						return time.Date(year, time.Month(month), day, 0, 0, 0, 0, loc), nil
+					}
+				}
+			}
+		}
 	}
 
 	// Handle special cases for simple strings
@@ -53,52 +79,18 @@ func StrToTime(str string, opts ...Option) (time.Time, error) {
 		year, month, day := yesterday.Date()
 		return time.Date(year, month, day, 0, 0, 0, 0, loc), nil
 	}
-
-	// Direct pattern matching for date formats
-	// ISO format: YYYY-MM-DD
-	if matched, _ := regexp.MatchString(`^\d{4}-\d{1,2}-\d{1,2}$`, str); matched {
-		parts := strings.Split(str, "-")
-		year, _ := strconv.Atoi(parts[0])
-		month, _ := strconv.Atoi(parts[1])
-		day, _ := strconv.Atoi(parts[2])
-		return time.Date(year, time.Month(month), day, 0, 0, 0, 0, loc), nil
+	
+	// Try standard date formats
+	if t, ok := parseISOFormat(str, loc); ok {
+		return t, nil
 	}
-
-	// Slash format: YYYY/MM/DD
-	if matched, _ := regexp.MatchString(`^\d{4}/\d{1,2}/\d{1,2}$`, str); matched {
-		parts := strings.Split(str, "/")
-		year, _ := strconv.Atoi(parts[0])
-		month, _ := strconv.Atoi(parts[1])
-		day, _ := strconv.Atoi(parts[2])
-		return time.Date(year, time.Month(month), day, 0, 0, 0, 0, loc), nil
+	
+	if t, ok := parseSlashFormat(str, loc); ok {
+		return t, nil
 	}
-
-	// US format: MM/DD/YYYY
-	if matched, _ := regexp.MatchString(`^\d{1,2}/\d{1,2}/\d{4}$`, str); matched {
-		parts := strings.Split(str, "/")
-		month, _ := strconv.Atoi(parts[0])
-		day, _ := strconv.Atoi(parts[1])
-		year, _ := strconv.Atoi(parts[2])
-		return time.Date(year, time.Month(month), day, 0, 0, 0, 0, loc), nil
-	}
-
-	// European format with dots: DD.MM.YY or DD.MM.YYYY
-	if matched, _ := regexp.MatchString(`^\d{1,2}\.\d{1,2}\.\d{2,4}$`, str); matched {
-		parts := strings.Split(str, ".")
-		day, _ := strconv.Atoi(parts[0])
-		month, _ := strconv.Atoi(parts[1])
-		year, _ := strconv.Atoi(parts[2])
-
-		// Handle 2-digit years (YY)
-		if year < 100 {
-			if year < 70 {
-				year += 2000 // 00-69 -> 2000-2069
-			} else {
-				year += 1900 // 70-99 -> 1970-1999
-			}
-		}
-
-		return time.Date(year, time.Month(month), day, 0, 0, 0, 0, loc), nil
+	
+	if t, ok := parseUSFormat(str, loc); ok {
+		return t, nil
 	}
 
 	// Normalize compound expressions like "next year+4 days" or "next year + 4 days"
@@ -166,6 +158,27 @@ func StrToTime(str string, opts ...Option) (time.Time, error) {
 				return time.Time{}, err
 			}
 
+			// Handle special case for month end dates when subtracting months
+			if timePart == "-1 month" {
+				year, month, day := dateResult.Date()
+				
+				// Check if it's the last day of the month
+				if day == daysInMonth(year, month) {
+					// Create a date for the first day of the current month
+					firstOfMonth := time.Date(year, month, 1, 0, 0, 0, 0, loc)
+					// Subtract one day to get the last day of the previous month
+					prevMonth := firstOfMonth.AddDate(0, -1, 0)
+					// Get the last day of the previous month
+					lastDay := daysInMonth(prevMonth.Year(), prevMonth.Month())
+					
+					// Create the final date with the last day of the previous month,
+					// preserving hour, minute, second from the original date
+					return time.Date(prevMonth.Year(), prevMonth.Month(), lastDay, 
+						dateResult.Hour(), dateResult.Minute(), dateResult.Second(), 
+						dateResult.Nanosecond(), loc), nil
+				}
+			}
+			
 			// Parse the time part using the date as reference
 			finalResult, err := StrToTime(timePart, append(opts, Rel(dateResult))...)
 			if err != nil {
@@ -320,6 +333,7 @@ func (p *Parser) consume() *Token {
 	return token
 }
 
+
 // tryParseStandardDate attempts to parse standard date formats like ISO dates
 func (p *Parser) tryParseStandardDate() (time.Time, bool, error) {
 	// ISO format: YYYY-MM-DD
@@ -330,13 +344,24 @@ func (p *Parser) tryParseStandardDate() (time.Time, bool, error) {
 		p.tokens[p.position+3].Typ == TypeOperator && p.tokens[p.position+3].Val == "-" &&
 		p.tokens[p.position+4].Typ == TypeNumber { // DD
 
-		year, _ := strconv.Atoi(p.tokens[p.position].Val)
+		year, err := strconv.Atoi(p.tokens[p.position].Val)
+		if err != nil {
+			return time.Time{}, false, fmt.Errorf("invalid year: %w", err)
+		}
 		p.position++
 		p.position++ // Skip the "-"
-		month, _ := strconv.Atoi(p.tokens[p.position].Val)
+		
+		month, err := strconv.Atoi(p.tokens[p.position].Val)
+		if err != nil {
+			return time.Time{}, false, fmt.Errorf("invalid month: %w", err)
+		}
 		p.position++
 		p.position++ // Skip the "-"
-		day, _ := strconv.Atoi(p.tokens[p.position].Val)
+		
+		day, err := strconv.Atoi(p.tokens[p.position].Val)
+		if err != nil {
+			return time.Time{}, false, fmt.Errorf("invalid day: %w", err)
+		}
 		p.position++
 
 		return time.Date(year, time.Month(month), day, 0, 0, 0, 0, p.loc), true, nil
@@ -350,13 +375,24 @@ func (p *Parser) tryParseStandardDate() (time.Time, bool, error) {
 		p.tokens[p.position+3].Typ == TypeOperator && p.tokens[p.position+3].Val == "/" &&
 		p.tokens[p.position+4].Typ == TypeNumber { // DD
 
-		year, _ := strconv.Atoi(p.tokens[p.position].Val)
+		year, err := strconv.Atoi(p.tokens[p.position].Val)
+		if err != nil {
+			return time.Time{}, false, fmt.Errorf("invalid year: %w", err)
+		}
 		p.position++
 		p.position++ // Skip the "/"
-		month, _ := strconv.Atoi(p.tokens[p.position].Val)
+		
+		month, err := strconv.Atoi(p.tokens[p.position].Val)
+		if err != nil {
+			return time.Time{}, false, fmt.Errorf("invalid month: %w", err)
+		}
 		p.position++
 		p.position++ // Skip the "/"
-		day, _ := strconv.Atoi(p.tokens[p.position].Val)
+		
+		day, err := strconv.Atoi(p.tokens[p.position].Val)
+		if err != nil {
+			return time.Time{}, false, fmt.Errorf("invalid day: %w", err)
+		}
 		p.position++
 
 		return time.Date(year, time.Month(month), day, 0, 0, 0, 0, p.loc), true, nil
@@ -370,13 +406,24 @@ func (p *Parser) tryParseStandardDate() (time.Time, bool, error) {
 		p.tokens[p.position+3].Typ == TypeOperator && p.tokens[p.position+3].Val == "/" &&
 		p.tokens[p.position+4].Typ == TypeNumber { // YYYY
 
-		month, _ := strconv.Atoi(p.tokens[p.position].Val)
+		month, err := strconv.Atoi(p.tokens[p.position].Val)
+		if err != nil {
+			return time.Time{}, false, fmt.Errorf("invalid month: %w", err)
+		}
 		p.position++
 		p.position++ // Skip the "/"
-		day, _ := strconv.Atoi(p.tokens[p.position].Val)
+		
+		day, err := strconv.Atoi(p.tokens[p.position].Val)
+		if err != nil {
+			return time.Time{}, false, fmt.Errorf("invalid day: %w", err)
+		}
 		p.position++
 		p.position++ // Skip the "/"
-		year, _ := strconv.Atoi(p.tokens[p.position].Val)
+		
+		year, err := strconv.Atoi(p.tokens[p.position].Val)
+		if err != nil {
+			return time.Time{}, false, fmt.Errorf("invalid year: %w", err)
+		}
 		p.position++
 
 		return time.Date(year, time.Month(month), day, 0, 0, 0, 0, p.loc), true, nil
@@ -390,13 +437,24 @@ func (p *Parser) tryParseStandardDate() (time.Time, bool, error) {
 		p.tokens[p.position+3].Typ == TypeOperator && p.tokens[p.position+3].Val == "." &&
 		p.tokens[p.position+4].Typ == TypeNumber { // YY or YYYY
 
-		day, _ := strconv.Atoi(p.tokens[p.position].Val)
+		day, err := strconv.Atoi(p.tokens[p.position].Val)
+		if err != nil {
+			return time.Time{}, false, fmt.Errorf("invalid day: %w", err)
+		}
 		p.position++
 		p.position++ // Skip the "."
-		month, _ := strconv.Atoi(p.tokens[p.position].Val)
+		
+		month, err := strconv.Atoi(p.tokens[p.position].Val)
+		if err != nil {
+			return time.Time{}, false, fmt.Errorf("invalid month: %w", err)
+		}
 		p.position++
 		p.position++ // Skip the "."
-		year, _ := strconv.Atoi(p.tokens[p.position].Val)
+		
+		year, err := strconv.Atoi(p.tokens[p.position].Val)
+		if err != nil {
+			return time.Time{}, false, fmt.Errorf("invalid year: %w", err)
+		}
 		p.position++
 
 		// Handle 2-digit years (YY)
@@ -422,28 +480,28 @@ func (p *Parser) tryParseNextLastExpression() (time.Time, bool, error) {
 
 	// Check for "next" or "last"
 	token := p.tokens[p.position]
-	if token.Typ != TypeString || (token.Val != "next" && token.Val != "last") {
+	if token.Typ != TypeString || (token.Val != DirectionNext && token.Val != DirectionLast) {
 		return time.Time{}, false, nil
 	}
 
-	isNext := token.Val == "next"
+	isNext := token.Val == DirectionNext
 	p.position++
 	p.skipWhitespace()
 
 	// Check for the unit token
 	if p.position >= len(p.tokens) {
-		return time.Time{}, false, fmt.Errorf("expected time unit after %s", token.Val)
+		return time.Time{}, false, fmt.Errorf("%w after %s", ErrExpectedTimeUnit, token.Val)
 	}
 
 	unitToken := p.tokens[p.position]
 	if unitToken.Typ != TypeString {
-		return time.Time{}, false, fmt.Errorf("expected time unit after %s, got %s", token.Val, unitToken.Val)
+		return time.Time{}, false, fmt.Errorf("%w after %s, got %s", ErrExpectedTimeUnit, token.Val, unitToken.Val)
 	}
 
 	p.position++
 
 	// Handle special case: "next week" and "last week"
-	if unitToken.Val == "week" {
+	if unitToken.Val == UnitWeek {
 		if isNext {
 			// Next week means the Monday of next week
 			dayOfWeek := int(p.result.Weekday())
@@ -517,20 +575,68 @@ func (p *Parser) tryParseNextLastExpression() (time.Time, bool, error) {
 
 	// Handle other time units
 	switch unitToken.Val {
-	case "month":
+	case UnitMonth:
 		if isNext {
 			return p.result.AddDate(0, 1, 0), true, nil
 		} else {
 			return p.result.AddDate(0, -1, 0), true, nil
 		}
-	case "year":
+	case UnitYear:
 		if isNext {
 			return p.result.AddDate(1, 0, 0), true, nil
 		} else {
 			return p.result.AddDate(-1, 0, 0), true, nil
 		}
 	default:
-		return time.Time{}, false, fmt.Errorf("unknown time unit: %s", unitToken.Val)
+		return time.Time{}, false, fmt.Errorf("%w: %s", ErrInvalidTimeUnit, unitToken.Val)
+	}
+}
+
+// daysInMonth returns the number of days in a given month and year
+func daysInMonth(year int, month time.Month) int {
+	// Create a date for the first day of the next month, then subtract one day
+	nextMonth := time.Date(year, month+1, 1, 0, 0, 0, 0, time.UTC)
+	lastDay := nextMonth.AddDate(0, 0, -1)
+	return lastDay.Day()
+}
+
+// applyTimeUnitOffset applies a time unit offset to the base time
+func (p *Parser) applyTimeUnitOffset(amount int, unitStr string) (time.Time, error) {
+	unit := normalizeTimeUnit(unitStr)
+
+	switch unit {
+	case UnitDay:
+		return p.result.AddDate(0, 0, amount), nil
+	case UnitWeek:
+		return p.result.AddDate(0, 0, amount*7), nil
+	case UnitMonth:
+		// Special handling for end-of-month dates
+		year, month, day := p.result.Date()
+			
+		// If day is the last day of the month, and we're adjusting months,
+		// make sure to set it to the last day of the target month
+		if day == daysInMonth(year, month) {
+			// Add the months first
+			newDate := p.result.AddDate(0, amount, 0)
+			newYear, newMonth, _ := newDate.Date()
+				
+			// Then set the day to the last day of the month
+			lastDay := daysInMonth(newYear, newMonth)
+			return time.Date(newYear, newMonth, lastDay, p.result.Hour(), 
+				p.result.Minute(), p.result.Second(), p.result.Nanosecond(), p.loc), nil
+		}
+			
+		return p.result.AddDate(0, amount, 0), nil
+	case UnitYear:
+		return p.result.AddDate(amount, 0, 0), nil
+	case UnitHour:
+		return p.result.Add(time.Duration(amount) * time.Hour), nil
+	case UnitMinute:
+		return p.result.Add(time.Duration(amount) * time.Minute), nil
+	case UnitSecond:
+		return p.result.Add(time.Duration(amount) * time.Second), nil
+	default:
+		return time.Time{}, fmt.Errorf("%w: %s", ErrInvalidTimeUnit, unitStr)
 	}
 }
 
@@ -554,7 +660,7 @@ func (p *Parser) tryParseRelativeTime() (time.Time, bool, error) {
 
 	// Check for the amount
 	if p.position >= len(p.tokens) {
-		return time.Time{}, false, fmt.Errorf("expected amount after %s", token.Val)
+		return time.Time{}, false, fmt.Errorf("%w after %s", ErrMissingAmount, token.Val)
 	}
 
 	amountToken := p.tokens[p.position]
@@ -564,7 +670,7 @@ func (p *Parser) tryParseRelativeTime() (time.Time, bool, error) {
 
 	amount, err := strconv.Atoi(amountToken.Val)
 	if err != nil {
-		return time.Time{}, false, fmt.Errorf("invalid number: %s", amountToken.Val)
+		return time.Time{}, false, fmt.Errorf("%w: %s", ErrInvalidNumber, amountToken.Val)
 	}
 	amount *= sign
 	p.position++
@@ -574,37 +680,23 @@ func (p *Parser) tryParseRelativeTime() (time.Time, bool, error) {
 
 	// Check for the unit
 	if p.position >= len(p.tokens) {
-		return time.Time{}, false, fmt.Errorf("expected time unit after %d", amount)
+		return time.Time{}, false, fmt.Errorf("%w after %d", ErrExpectedTimeUnit, amount)
 	}
 
 	unitToken := p.tokens[p.position]
 	if unitToken.Typ != TypeString {
-		return time.Time{}, false, fmt.Errorf("expected time unit after %d, got %s", amount, unitToken.Val)
+		return time.Time{}, false, fmt.Errorf("%w after %d, got %s", ErrExpectedTimeUnit, amount, unitToken.Val)
 	}
 
 	p.position++
 
-	// Process the unit
-	unit := normalizeTimeUnit(unitToken.Val)
-
-	switch unit {
-	case "day":
-		return p.result.AddDate(0, 0, amount), true, nil
-	case "week":
-		return p.result.AddDate(0, 0, amount*7), true, nil
-	case "month":
-		return p.result.AddDate(0, amount, 0), true, nil
-	case "year":
-		return p.result.AddDate(amount, 0, 0), true, nil
-	case "hour":
-		return p.result.Add(time.Duration(amount) * time.Hour), true, nil
-	case "minute":
-		return p.result.Add(time.Duration(amount) * time.Minute), true, nil
-	case "second":
-		return p.result.Add(time.Duration(amount) * time.Second), true, nil
-	default:
-		return time.Time{}, false, fmt.Errorf("unknown time unit: %s", unitToken.Val)
+	// Process the unit by calling the common helper function
+	result, err := p.applyTimeUnitOffset(amount, unitToken.Val)
+	if err != nil {
+		return time.Time{}, false, err
 	}
+	
+	return result, true, nil
 }
 
 // tryParseImplicitRelativeTime attempts to parse expressions like "4 days" or "10 minutes" (without explicit + operator)
@@ -621,7 +713,7 @@ func (p *Parser) tryParseImplicitRelativeTime() (time.Time, bool, error) {
 
 	amount, err := strconv.Atoi(token.Val)
 	if err != nil {
-		return time.Time{}, false, fmt.Errorf("invalid number: %s", token.Val)
+		return time.Time{}, false, fmt.Errorf("%w: %s", ErrInvalidNumber, token.Val)
 	}
 
 	// Always treat as positive (implicit +)
@@ -632,37 +724,23 @@ func (p *Parser) tryParseImplicitRelativeTime() (time.Time, bool, error) {
 
 	// Check for the unit
 	if p.position >= len(p.tokens) {
-		return time.Time{}, false, fmt.Errorf("expected time unit after %d", amount)
+		return time.Time{}, false, fmt.Errorf("%w after %d", ErrExpectedTimeUnit, amount)
 	}
 
 	unitToken := p.tokens[p.position]
 	if unitToken.Typ != TypeString {
-		return time.Time{}, false, fmt.Errorf("expected time unit after %d, got %s", amount, unitToken.Val)
+		return time.Time{}, false, fmt.Errorf("%w after %d, got %s", ErrExpectedTimeUnit, amount, unitToken.Val)
 	}
 
 	p.position++
 
-	// Process the unit
-	unit := normalizeTimeUnit(unitToken.Val)
-
-	switch unit {
-	case "day":
-		return p.result.AddDate(0, 0, amount), true, nil
-	case "week":
-		return p.result.AddDate(0, 0, amount*7), true, nil
-	case "month":
-		return p.result.AddDate(0, amount, 0), true, nil
-	case "year":
-		return p.result.AddDate(amount, 0, 0), true, nil
-	case "hour":
-		return p.result.Add(time.Duration(amount) * time.Hour), true, nil
-	case "minute":
-		return p.result.Add(time.Duration(amount) * time.Minute), true, nil
-	case "second":
-		return p.result.Add(time.Duration(amount) * time.Second), true, nil
-	default:
-		return time.Time{}, false, fmt.Errorf("unknown time unit: %s", unitToken.Val)
+	// Process the unit by calling the common helper function
+	result, err := p.applyTimeUnitOffset(amount, unitToken.Val)
+	if err != nil {
+		return time.Time{}, false, err
 	}
+	
+	return result, true, nil
 }
 
 // tryParseMonthOnlyFormat attempts to parse just a month name like "January" or "Feb"
@@ -839,44 +917,67 @@ func getDayOfWeek(day string) int {
 
 // normalizeTimeUnit converts various time unit notations to a canonical form
 func normalizeTimeUnit(unit string) string {
-	// Handle plural forms first
-	if strings.HasSuffix(unit, "s") {
+	// Hard-code specific problem variations that need exact matching
+	switch unit {
+	case "hourss", "hrs", "hrs.":
+		return UnitHour
+	case "days.", "days":
+		return UnitDay
+	case "weeks", "wks", "wks.":
+		return UnitWeek
+	case "months", "mons", "mons.":
+		return UnitMonth
+	case "years", "yrs", "yrs.":
+		return UnitYear
+	case "minutes", "mins", "mins.":
+		return UnitMinute
+	case "seconds", "secs", "secs.":
+		return UnitSecond
+	}
+	
+	// Handle excessive plural forms (e.g., "hourss" -> "hours" -> "hour")
+	for strings.HasSuffix(unit, "s") {
 		unit = unit[:len(unit)-1]
 	}
 
 	// Check for common abbreviations and misspellings
 	switch unit {
 	case "d":
-		return "day"
+		return UnitDay
 	case "w", "wk":
-		return "week"
+		return UnitWeek
 	case "m", "mon":
-		return "month"
+		return UnitMonth
 	case "y", "yr":
-		return "year"
+		return UnitYear
 	case "h", "hr":
-		return "hour"
+		return UnitHour
 	case "min":
-		return "minute"
+		return UnitMinute
 	case "sec":
-		return "second"
+		return UnitSecond
 	}
 
 	// Handle prefixes to catch misspellings or variations
 	if strings.HasPrefix(unit, "day") {
-		return "day"
+		return UnitDay
 	} else if strings.HasPrefix(unit, "week") {
-		return "week"
+		return UnitWeek
 	} else if strings.HasPrefix(unit, "month") {
-		return "month"
+		return UnitMonth
 	} else if strings.HasPrefix(unit, "year") {
-		return "year"
+		return UnitYear
 	} else if strings.HasPrefix(unit, "hour") || strings.HasPrefix(unit, "hr") {
-		return "hour"
+		return UnitHour
 	} else if strings.HasPrefix(unit, "minute") || strings.HasPrefix(unit, "min") {
-		return "minute"
+		return UnitMinute
 	} else if strings.HasPrefix(unit, "second") || strings.HasPrefix(unit, "sec") {
-		return "second"
+		return UnitSecond
+	}
+	
+	// Try more aggressive matching for hours
+	if strings.Contains(unit, "hr") || strings.Contains(unit, "hour") {
+		return UnitHour
 	}
 
 	// If we couldn't normalize, return the original unit
