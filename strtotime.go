@@ -150,6 +150,24 @@ nextFormat:
 	if t, ok := parseUSFormat(str, loc); ok {
 		return t, nil
 	}
+	
+	// Try extended date formats
+	if t, ok := parseCompactTimestamp(str, loc); ok {
+		return t, nil
+	}
+	
+	if t, ok := parseMonthNameFormat(str, loc); ok {
+		return t, nil
+	}
+	
+	if t, ok := parseHTTPLogFormat(str, loc); ok {
+		return t, nil
+	}
+	
+	// Try parsing numbered weekday (e.g. "first Monday of December 2008")
+	if t, ok := parseNumberedWeekday(str, now, loc); ok {
+		return t, nil
+	}
 
 	// Check if this is a compound expression (contains + or - in the middle)
 	if isCompoundExpression(str) {
