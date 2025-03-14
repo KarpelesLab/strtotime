@@ -34,8 +34,21 @@ func StrToTime(str string, opts ...Option) (time.Time, error) {
 	// Store original string for error reporting
 	origStr := str
 
-	// Basic implementation of some simple time formats
+	// Normalize input: trim spaces and convert to lowercase
 	str = strings.ToLower(strings.TrimSpace(str))
+	
+	// Check if this is a compound expression like "next year + 4 days" or "next year+4 days"
+	// We support both formats with or without spaces around operators
+	if strings.Contains(str, "+") || strings.Contains(str, "-") {
+		// Skip expressions that are just simple +/- prefixed formats like "+1 day"
+		if !strings.HasPrefix(str, "+") && !strings.HasPrefix(str, "-") {
+			result, err := processCompoundExpression(str, now, loc, opts)
+			if err == nil {
+				return result, nil
+			}
+		}
+		// If compound processing fails, continue with normal processing
+	}
 
 	// Special formats
 	switch str {
@@ -140,6 +153,10 @@ func StrToTime(str string, opts ...Option) (time.Time, error) {
 				return now.AddDate(0, amount, 0), nil
 			case "year", "years":
 				return now.AddDate(amount, 0, 0), nil
+			case "hour", "hours":
+				return now.Add(time.Duration(amount) * time.Hour), nil
+			case "minute", "minutes":
+				return now.Add(time.Duration(amount) * time.Minute), nil
 			}
 		}
 
@@ -172,6 +189,10 @@ func StrToTime(str string, opts ...Option) (time.Time, error) {
 				return now.AddDate(0, amount, 0), nil
 			case "year", "years":
 				return now.AddDate(amount, 0, 0), nil
+			case "hour", "hours":
+				return now.Add(time.Duration(amount) * time.Hour), nil
+			case "minute", "minutes":
+				return now.Add(time.Duration(amount) * time.Minute), nil
 			}
 		}
 	}
@@ -320,6 +341,56 @@ func StrToTime(str string, opts ...Option) (time.Time, error) {
 
 	// We need more complex parsing for other formats
 	return time.Time{}, errors.New("unknown or unsupported time format: " + origStr)
+}
+
+// processCompoundExpression handles expressions with multiple parts like "next year + 4 days" or "next year+4 days"
+func processCompoundExpression(str string, now time.Time, loc *time.Location, opts []Option) (time.Time, error) {
+	// Use regex to split the string at +/- operators, preserving the operators
+	re := regexp.MustCompile(`([+-])`)
+	parts := re.Split(str, -1)
+	operators := re.FindAllString(str, -1)
+	
+	if len(parts) <= 1 {
+		return time.Time{}, errors.New("invalid compound expression: " + str)
+	}
+	
+	// Process the first part to get a base time
+	baseTime, err := StrToTime(parts[0], append(opts, Rel(now))...)
+	if err != nil {
+		return time.Time{}, err
+	}
+	
+	// Process the remaining parts sequentially with their operators
+	resultTime := baseTime
+	for i := 1; i < len(parts); i++ {
+		if i-1 >= len(operators) {
+			break // No more operators
+		}
+		
+		operator := operators[i-1]
+		part := strings.TrimSpace(parts[i])
+		
+		if part == "" {
+			continue // Skip empty parts
+		}
+		
+		// Add the operator prefix to ensure it's treated correctly
+		adjustmentStr := operator + " " + part
+		
+		// Process this part with the previous result as reference
+		nextTime, err := StrToTime(adjustmentStr, append(opts, Rel(resultTime))...)
+		if err != nil {
+			// Try an alternative approach by adding the operator directly
+			adjustmentStr = operator + part
+			nextTime, err = StrToTime(adjustmentStr, append(opts, Rel(resultTime))...)
+			if err != nil {
+				return time.Time{}, err
+			}
+		}
+		resultTime = nextTime
+	}
+	
+	return resultTime, nil
 }
 
 // getDayOfWeek converts day name to day number (0 = Sunday, 6 = Saturday)

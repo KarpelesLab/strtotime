@@ -126,6 +126,31 @@ func TestStrToTime(t *testing.T) {
 		// Mixed case for next/last
 		"Next Month",
 		"LAST YEAR",
+		
+		// Compound expressions with spaces around operators
+		"next year + 4 days",
+		"next month + 2 weeks",
+		"next week + 3 days",
+		"tomorrow + 12 hours",
+		"next year - 2 months",
+		"next month - 1 week",
+		
+		// Compound expressions without spaces around operators
+		"next year+4 days",
+		"next month+2 weeks",
+		"next week+3 days",
+		"tomorrow+12 hours",
+		"next year-2 months",
+		"next month-1 week",
+		
+		// Multiple compound operators
+		"next year + 1 month + 1 week",
+		"next month - 2 days + 12 hours",
+		"next year+1 month-2 days",
+		
+		// Mixed spacing in compound expressions
+		"next year+1 month + 2 days",
+		"next month + 1 week+3 days",
 	}
 
 	// First get PHP's timezone
