@@ -7,11 +7,25 @@ import (
 	"time"
 )
 
+// Pre-compiled regular expressions for better performance
+var (
+	// Compact timestamp regex: "19970523091528" (YYYYMMDDhhmmss)
+	compactTimestampRegex = regexp.MustCompile(`^(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})(\d{2})$`)
+	
+	// Month name formats
+	monthNameMDYRegex = regexp.MustCompile(`^([A-Za-z]{3,})-(\d{1,2})-(\d{4})$`)
+	monthNameYMDRegex = regexp.MustCompile(`^(\d{4})-([A-Za-z]{3,})-(\d{1,2})$`)
+	
+	// HTTP log format: "10/Oct/2000:13:55:36 +0100"
+	httpLogRegex = regexp.MustCompile(`^(\d{1,2})/([A-Za-z]{3})/(\d{4}):(\d{2}):(\d{2}):(\d{2})\s+([+-]\d{4})$`)
+	
+	// Numbered weekday regex
+	numberedWeekdayRegex = regexp.MustCompile(`^(?:(\d+)|(?:(first|1st|second|2nd|third|3rd|fourth|4th|fifth|5th|last)))\s+([A-Za-z]+)(?:\s+(?:of\s+)?)?([A-Za-z]+)(?:\s+(\d{4}))?$`)
+)
+
 // parseCompactTimestamp parses timestamp formats like "19970523091528" (YYYYMMDDhhmmss)
 func parseCompactTimestamp(str string, loc *time.Location) (time.Time, bool) {
-	compactRE := regexp.MustCompile(`^(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})(\d{2})$`)
-	
-	if matches := compactRE.FindStringSubmatch(str); matches != nil {
+	if matches := compactTimestampRegex.FindStringSubmatch(str); matches != nil {
 		year, _ := strconv.Atoi(matches[1])
 		month, _ := strconv.Atoi(matches[2])
 		day, _ := strconv.Atoi(matches[3])
@@ -38,8 +52,7 @@ func parseCompactTimestamp(str string, loc *time.Location) (time.Time, bool) {
 // parseMonthNameFormat parses formats like "Jan-15-2006" or "2006-Jan-15"
 func parseMonthNameFormat(str string, loc *time.Location) (time.Time, bool) {
 	// Handle "Jan-15-2006" format
-	mdyRE := regexp.MustCompile(`^([A-Za-z]{3,})-(\d{1,2})-(\d{4})$`)
-	if matches := mdyRE.FindStringSubmatch(str); matches != nil {
+	if matches := monthNameMDYRegex.FindStringSubmatch(str); matches != nil {
 		monthName := matches[1]
 		day, _ := strconv.Atoi(matches[2])
 		year, _ := strconv.Atoi(matches[3])
@@ -57,8 +70,7 @@ func parseMonthNameFormat(str string, loc *time.Location) (time.Time, bool) {
 	}
 	
 	// Handle "2006-Jan-15" format
-	ymdRE := regexp.MustCompile(`^(\d{4})-([A-Za-z]{3,})-(\d{1,2})$`)
-	if matches := ymdRE.FindStringSubmatch(str); matches != nil {
+	if matches := monthNameYMDRegex.FindStringSubmatch(str); matches != nil {
 		year, _ := strconv.Atoi(matches[1])
 		monthName := matches[2]
 		day, _ := strconv.Atoi(matches[3])
@@ -80,10 +92,7 @@ func parseMonthNameFormat(str string, loc *time.Location) (time.Time, bool) {
 
 // parseHTTPLogFormat parses formats like "10/Oct/2000:13:55:36 +0100"
 func parseHTTPLogFormat(str string, loc *time.Location) (time.Time, bool) {
-	// Match the HTTP log format: "10/Oct/2000:13:55:36 +0100"
-	httpLogRE := regexp.MustCompile(`^(\d{1,2})/([A-Za-z]{3})/(\d{4}):(\d{2}):(\d{2}):(\d{2})\s+([+-]\d{4})$`)
-	
-	if matches := httpLogRE.FindStringSubmatch(str); matches != nil {
+	if matches := httpLogRegex.FindStringSubmatch(str); matches != nil {
 		day, _ := strconv.Atoi(matches[1])
 		monthStr := matches[2]
 		year, _ := strconv.Atoi(matches[3])
@@ -118,11 +127,7 @@ func parseHTTPLogFormat(str string, loc *time.Location) (time.Time, bool) {
 // parseNumberedWeekday parses formats like "1 Monday December 2008", "second Monday December 2008"
 // It handles formats like "first Monday of December 2008" or "3rd Friday of January"
 func parseNumberedWeekday(str string, now time.Time, loc *time.Location) (time.Time, bool) {
-	// For patterns like "1 Monday December 2008" or "first Monday December 2008"
-	// Also "first Monday of December 2008"
-	ordinalRE := regexp.MustCompile(`^(?:(\d+)|(?:(first|1st|second|2nd|third|3rd|fourth|4th|fifth|5th|last)))\s+([A-Za-z]+)(?:\s+(?:of\s+)?)?([A-Za-z]+)(?:\s+(\d{4}))?$`)
-	
-	if matches := ordinalRE.FindStringSubmatch(str); matches != nil {
+	if matches := numberedWeekdayRegex.FindStringSubmatch(str); matches != nil {
 		var ordinal int
 		
 		// Parse the ordinal (numeric or word)
