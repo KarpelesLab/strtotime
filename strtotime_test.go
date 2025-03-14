@@ -151,6 +151,10 @@ func TestStrToTime(t *testing.T) {
 		// Mixed spacing in compound expressions
 		"next year+1 month + 2 days",
 		"next month + 1 week+3 days",
+		
+		// Sequential time expressions (stream-based parsing)
+		"next monday next year",
+		"next friday last month",
 	}
 
 	// First get PHP's timezone

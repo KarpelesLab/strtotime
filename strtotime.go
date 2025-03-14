@@ -31,26 +31,13 @@ func StrToTime(str string, opts ...Option) (time.Time, error) {
 		now = now.In(loc)
 	}
 
-	// Store original string for error reporting
-	origStr := str
-
-	// Normalize input: trim spaces and convert to lowercase
+	// Normalize string - trim and lowercase
 	str = strings.ToLower(strings.TrimSpace(str))
-	
-	// Check if this is a compound expression like "next year + 4 days" or "next year+4 days"
-	// We support both formats with or without spaces around operators
-	if strings.Contains(str, "+") || strings.Contains(str, "-") {
-		// Skip expressions that are just simple +/- prefixed formats like "+1 day"
-		if !strings.HasPrefix(str, "+") && !strings.HasPrefix(str, "-") {
-			result, err := processCompoundExpression(str, now, loc, opts)
-			if err == nil {
-				return result, nil
-			}
-		}
-		// If compound processing fails, continue with normal processing
+	if str == "" {
+		return time.Time{}, errors.New("empty time string")
 	}
 
-	// Special formats
+	// Handle special cases for simple strings
 	switch str {
 	case "now":
 		return now, nil
@@ -65,235 +52,540 @@ func StrToTime(str string, opts ...Option) (time.Time, error) {
 		yesterday := now.AddDate(0, 0, -1)
 		year, month, day := yesterday.Date()
 		return time.Date(year, month, day, 0, 0, 0, 0, loc), nil
-	case "next week":
-		// PHP treats "next week" as "next Monday" (not the next occurrence of Monday, but Monday of next week)
-		// If today is Friday, "next week" gives next Monday (3 days away)
-		// But we need to adjust this calculation
-
-		// Today is 2025-03-14 (Friday), and "next week" is Monday, March 17, 2025
-		// So for Friday, the difference is 3 days (not 4)
-
-		dayOfWeek := int(now.Weekday())
-		var daysToAdd int
-
-		switch dayOfWeek {
-		case 0: // Sunday
-			daysToAdd = 1 // Next Monday is 1 day away
-		case 1: // Monday
-			daysToAdd = 0 // This is already Monday - go to today but at 00:00:00
-		case 2: // Tuesday
-			daysToAdd = 6 // Next Monday is 6 days away
-		case 3: // Wednesday
-			daysToAdd = 5 // Next Monday is 5 days away
-		case 4: // Thursday
-			daysToAdd = 4 // Next Monday is 4 days away
-		case 5: // Friday
-			daysToAdd = 3 // Next Monday is 3 days away
-		case 6: // Saturday
-			daysToAdd = 2 // Next Monday is 2 days away
-		}
-
-		// Important: PHP keeps the time for "next week"
-		nextMondayTime := now.AddDate(0, 0, daysToAdd)
-		return nextMondayTime, nil
-
-	case "last week":
-		// PHP treats "last week" as the previous Monday
-		// For Friday March 14, 2025, that's Monday March 3, 2025 (11 days earlier)
-
-		dayOfWeek := int(now.Weekday())
-		var daysToSubtract int
-
-		switch dayOfWeek {
-		case 0: // Sunday
-			daysToSubtract = 6 // Last Monday was 6 days ago
-		case 1: // Monday
-			daysToSubtract = 7 // Last Monday was a week ago
-		case 2: // Tuesday
-			daysToSubtract = 8 // Last Monday was 8 days ago
-		case 3: // Wednesday
-			daysToSubtract = 9 // Last Monday was 9 days ago
-		case 4: // Thursday
-			daysToSubtract = 10 // Last Monday was 10 days ago
-		case 5: // Friday
-			daysToSubtract = 11 // Last Monday was 11 days ago
-		case 6: // Saturday
-			daysToSubtract = 12 // Last Monday was 12 days ago
-		}
-
-		lastMondayTime := now.AddDate(0, 0, -daysToSubtract)
-		return lastMondayTime, nil
 	}
 
-	// Handle +/- relative time formats
-	if strings.HasPrefix(str, "+") || strings.HasPrefix(str, "-") {
-		sign := 1
-		if strings.HasPrefix(str, "-") {
-			sign = -1
-		}
+	// Direct pattern matching for date formats
+	// ISO format: YYYY-MM-DD
+	if matched, _ := regexp.MatchString(`^\d{4}-\d{1,2}-\d{1,2}$`, str); matched {
+		parts := strings.Split(str, "-")
+		year, _ := strconv.Atoi(parts[0])
+		month, _ := strconv.Atoi(parts[1])
+		day, _ := strconv.Atoi(parts[2])
+		return time.Date(year, time.Month(month), day, 0, 0, 0, 0, loc), nil
+	}
 
-		// Use regexp to handle variable whitespace
-		reRelTime := regexp.MustCompile(`^[+-](\d+)\s+(\w+)$`)
-		if matches := reRelTime.FindStringSubmatch(str); len(matches) == 3 {
-			amount, err := strconv.Atoi(matches[1])
+	// Slash format: YYYY/MM/DD
+	if matched, _ := regexp.MatchString(`^\d{4}/\d{1,2}/\d{1,2}$`, str); matched {
+		parts := strings.Split(str, "/")
+		year, _ := strconv.Atoi(parts[0])
+		month, _ := strconv.Atoi(parts[1])
+		day, _ := strconv.Atoi(parts[2])
+		return time.Date(year, time.Month(month), day, 0, 0, 0, 0, loc), nil
+	}
+
+	// US format: MM/DD/YYYY
+	if matched, _ := regexp.MatchString(`^\d{1,2}/\d{1,2}/\d{4}$`, str); matched {
+		parts := strings.Split(str, "/")
+		month, _ := strconv.Atoi(parts[0])
+		day, _ := strconv.Atoi(parts[1])
+		year, _ := strconv.Atoi(parts[2])
+		return time.Date(year, time.Month(month), day, 0, 0, 0, 0, loc), nil
+	}
+
+	// Normalize compound expressions like "next year+4 days" or "next year + 4 days"
+	// Replace spaces around + and - with nothing to make parsing easier
+	spaceOperatorRe := strings.NewReplacer(" + ", "+", " - ", "-", "+ ", "+", "- ", "-")
+	normalizedStr := spaceOperatorRe.Replace(str)
+	
+	// If we have + or - in the middle of the string (not at the start)
+	// then it's likely a compound expression
+	if (strings.Contains(normalizedStr, "+") && !strings.HasPrefix(normalizedStr, "+")) ||
+	   (strings.Contains(normalizedStr, "-") && !strings.HasPrefix(normalizedStr, "-")) {
+		// Split the string at + and - operators
+		var parts []string
+		var operators []string
+		
+		// First find all + and - operators (not at the beginning)
+		currentPart := ""
+		for i := 0; i < len(normalizedStr); i++ {
+			if (normalizedStr[i] == '+' || normalizedStr[i] == '-') && i > 0 {
+				parts = append(parts, currentPart)
+				operators = append(operators, string(normalizedStr[i]))
+				currentPart = ""
+			} else {
+				currentPart += string(normalizedStr[i])
+			}
+		}
+		
+		// Add the last part
+		if currentPart != "" {
+			parts = append(parts, currentPart)
+		}
+		
+		// Process the first part
+		result, err := StrToTime(parts[0], append(opts, Rel(now))...)
+		if err != nil {
+			return time.Time{}, err
+		}
+		
+		// Process each remaining part with its operator
+		for i := 0; i < len(operators); i++ {
+			// Apply the operator to the part
+			opPart := operators[i] + parts[i+1]
+			nextResult, err := StrToTime(opPart, append(opts, Rel(result))...)
 			if err != nil {
 				return time.Time{}, err
 			}
+			result = nextResult
+		}
+		
+		return result, nil
+	}
+	
+	// Tokenize the input string
+	tokens := Tokenize(str)
+	
+	// Create a parser to process the tokens
+	parser := &Parser{
+		tokens:   tokens,
+		position: 0,
+		result:   now,
+		loc:      loc,
+	}
 
-			// Apply the sign
-			amount = amount * sign
+	// Parse tokens
+	result, err := parser.Parse()
+	if err != nil {
+		return time.Time{}, fmt.Errorf("unable to parse time string: %s: %w", str, err)
+	}
 
-			unit := matches[2]
-			switch unit {
-			case "day", "days":
-				return now.AddDate(0, 0, amount), nil
-			case "week", "weeks":
-				return now.AddDate(0, 0, amount*7), nil
-			case "month", "months":
-				return now.AddDate(0, amount, 0), nil
-			case "year", "years":
-				return now.AddDate(amount, 0, 0), nil
-			case "hour", "hours":
-				return now.Add(time.Duration(amount) * time.Hour), nil
-			case "minute", "minutes":
-				return now.Add(time.Duration(amount) * time.Minute), nil
-			}
+	return result, nil
+}
+
+// Parser represents a token stream parser for time expressions
+type Parser struct {
+	tokens   []Token
+	position int
+	result   time.Time
+	loc      *time.Location
+}
+
+// Parse processes the token stream and returns a time.Time result
+func (p *Parser) Parse() (time.Time, error) {
+	// Skip any leading whitespace
+	p.skipWhitespace()
+
+	// Try standard date formats first
+	if t, ok, err := p.tryParseStandardDate(); ok {
+		return t, err
+	}
+
+	// Try relative expressions
+	for p.position < len(p.tokens) {
+		// Skip whitespace between expressions
+		p.skipWhitespace()
+		
+		if p.position >= len(p.tokens) {
+			break
 		}
 
-		// If the standard pattern didn't match, try a more permissive one with multiple whitespaces
-		reRelTimeMultiSpace := regexp.MustCompile(`^[+-](\d+)\s+(\w+)$`)
-		origStrTrimmed := strings.TrimSpace(origStr)
-		origStrLower := strings.ToLower(origStrTrimmed)
+		// Try to parse each expression type
+		parsed := false
 
-		// Normalize multiple spaces to single space
-		normalized := regexp.MustCompile(`\s+`).ReplaceAllString(origStrLower, " ")
-
-		if matches := reRelTimeMultiSpace.FindStringSubmatch(normalized); len(matches) == 3 {
-			amount, err := strconv.Atoi(matches[1])
+		// Try "next/last" expressions
+		if t, ok, err := p.tryParseNextLastExpression(); ok {
 			if err != nil {
 				return time.Time{}, err
 			}
+			p.result = t
+			parsed = true
+		}
 
-			// Apply the sign
-			if strings.HasPrefix(normalized, "-") {
-				amount = -amount
+		// Try +/- relative time
+		if !parsed {
+			if t, ok, err := p.tryParseRelativeTime(); ok {
+				if err != nil {
+					return time.Time{}, err
+				}
+				p.result = t
+				parsed = true
 			}
+		}
 
-			unit := matches[2]
-			switch unit {
-			case "day", "days":
-				return now.AddDate(0, 0, amount), nil
-			case "week", "weeks":
-				return now.AddDate(0, 0, amount*7), nil
-			case "month", "months":
-				return now.AddDate(0, amount, 0), nil
-			case "year", "years":
-				return now.AddDate(amount, 0, 0), nil
-			case "hour", "hours":
-				return now.Add(time.Duration(amount) * time.Hour), nil
-			case "minute", "minutes":
-				return now.Add(time.Duration(amount) * time.Minute), nil
+		// Try month name format
+		if !parsed {
+			if t, ok, err := p.tryParseMonthNameFormat(); ok {
+				if err != nil {
+					return time.Time{}, err
+				}
+				p.result = t
+				parsed = true
 			}
+		}
+
+		// Handle unrecognized token
+		if !parsed && p.position < len(p.tokens) {
+			currentToken := p.tokens[p.position]
+			p.position++
+			if currentToken.Typ != TypeWhitespace {
+				return time.Time{}, fmt.Errorf("unexpected token: %s", currentToken.Val)
+			}
+		}
+
+		// Skip whitespace after expressions
+		p.skipWhitespace()
+	}
+
+	return p.result, nil
+}
+
+// skipWhitespace advances the position past any whitespace tokens
+func (p *Parser) skipWhitespace() {
+	for p.position < len(p.tokens) && p.tokens[p.position].Typ == TypeWhitespace {
+		p.position++
+	}
+}
+
+// peek returns the next token without advancing the position
+func (p *Parser) peek() *Token {
+	if p.position >= len(p.tokens) {
+		return nil
+	}
+	return &p.tokens[p.position]
+}
+
+// consume advances the position and returns the current token
+func (p *Parser) consume() *Token {
+	if p.position >= len(p.tokens) {
+		return nil
+	}
+	token := &p.tokens[p.position]
+	p.position++
+	return token
+}
+
+// tryParseStandardDate attempts to parse standard date formats like ISO dates
+func (p *Parser) tryParseStandardDate() (time.Time, bool, error) {
+	// ISO format: YYYY-MM-DD
+	if p.position+4 < len(p.tokens) &&
+		p.tokens[p.position].Typ == TypeNumber && // YYYY
+		p.tokens[p.position+1].Typ == TypeOperator && p.tokens[p.position+1].Val == "-" &&
+		p.tokens[p.position+2].Typ == TypeNumber && // MM
+		p.tokens[p.position+3].Typ == TypeOperator && p.tokens[p.position+3].Val == "-" &&
+		p.tokens[p.position+4].Typ == TypeNumber { // DD
+		
+		year, _ := strconv.Atoi(p.tokens[p.position].Val)
+		p.position++
+		p.position++ // Skip the "-"
+		month, _ := strconv.Atoi(p.tokens[p.position].Val)
+		p.position++
+		p.position++ // Skip the "-"
+		day, _ := strconv.Atoi(p.tokens[p.position].Val)
+		p.position++
+
+		return time.Date(year, time.Month(month), day, 0, 0, 0, 0, p.loc), true, nil
+	}
+
+	// Slash format: YYYY/MM/DD
+	if p.position+4 < len(p.tokens) &&
+		p.tokens[p.position].Typ == TypeNumber && // YYYY
+		p.tokens[p.position+1].Typ == TypeOperator && p.tokens[p.position+1].Val == "/" &&
+		p.tokens[p.position+2].Typ == TypeNumber && // MM
+		p.tokens[p.position+3].Typ == TypeOperator && p.tokens[p.position+3].Val == "/" &&
+		p.tokens[p.position+4].Typ == TypeNumber { // DD
+		
+		year, _ := strconv.Atoi(p.tokens[p.position].Val)
+		p.position++
+		p.position++ // Skip the "/"
+		month, _ := strconv.Atoi(p.tokens[p.position].Val)
+		p.position++
+		p.position++ // Skip the "/"
+		day, _ := strconv.Atoi(p.tokens[p.position].Val)
+		p.position++
+
+		return time.Date(year, time.Month(month), day, 0, 0, 0, 0, p.loc), true, nil
+	}
+
+	// US format: MM/DD/YYYY
+	if p.position+4 < len(p.tokens) &&
+		p.tokens[p.position].Typ == TypeNumber && // MM
+		p.tokens[p.position+1].Typ == TypeOperator && p.tokens[p.position+1].Val == "/" &&
+		p.tokens[p.position+2].Typ == TypeNumber && // DD
+		p.tokens[p.position+3].Typ == TypeOperator && p.tokens[p.position+3].Val == "/" &&
+		p.tokens[p.position+4].Typ == TypeNumber { // YYYY
+		
+		month, _ := strconv.Atoi(p.tokens[p.position].Val)
+		p.position++
+		p.position++ // Skip the "/"
+		day, _ := strconv.Atoi(p.tokens[p.position].Val)
+		p.position++
+		p.position++ // Skip the "/"
+		year, _ := strconv.Atoi(p.tokens[p.position].Val)
+		p.position++
+
+		return time.Date(year, time.Month(month), day, 0, 0, 0, 0, p.loc), true, nil
+	}
+
+	return time.Time{}, false, nil
+}
+
+// tryParseNextLastExpression attempts to parse expressions like "next Monday" or "last year"
+func (p *Parser) tryParseNextLastExpression() (time.Time, bool, error) {
+	if p.position >= len(p.tokens) {
+		return time.Time{}, false, nil
+	}
+
+	// Check for "next" or "last"
+	token := p.tokens[p.position]
+	if token.Typ != TypeString || (token.Val != "next" && token.Val != "last") {
+		return time.Time{}, false, nil
+	}
+
+	isNext := token.Val == "next"
+	p.position++
+	p.skipWhitespace()
+
+	// Check for the unit token
+	if p.position >= len(p.tokens) {
+		return time.Time{}, false, fmt.Errorf("expected time unit after %s", token.Val)
+	}
+
+	unitToken := p.tokens[p.position]
+	if unitToken.Typ != TypeString {
+		return time.Time{}, false, fmt.Errorf("expected time unit after %s, got %s", token.Val, unitToken.Val)
+	}
+
+	p.position++
+
+	// Handle special case: "next week" and "last week"
+	if unitToken.Val == "week" {
+		if isNext {
+			// Next week means the Monday of next week
+			dayOfWeek := int(p.result.Weekday())
+			var daysToAdd int
+			switch dayOfWeek {
+			case 0: // Sunday
+				daysToAdd = 1 // Next Monday is 1 day away
+			case 1: // Monday
+				daysToAdd = 0 // This is already Monday
+			case 2: // Tuesday
+				daysToAdd = 6 // Next Monday is 6 days away
+			case 3: // Wednesday
+				daysToAdd = 5 // Next Monday is 5 days away
+			case 4: // Thursday
+				daysToAdd = 4 // Next Monday is 4 days away
+			case 5: // Friday
+				daysToAdd = 3 // Next Monday is 3 days away
+			case 6: // Saturday
+				daysToAdd = 2 // Next Monday is 2 days away
+			}
+			return p.result.AddDate(0, 0, daysToAdd), true, nil
+		} else {
+			// Last week means the Monday of the previous week
+			dayOfWeek := int(p.result.Weekday())
+			var daysToSubtract int
+			switch dayOfWeek {
+			case 0: // Sunday
+				daysToSubtract = 6 // Last Monday was 6 days ago
+			case 1: // Monday
+				daysToSubtract = 7 // Last Monday was a week ago
+			case 2: // Tuesday
+				daysToSubtract = 8 // Last Monday was 8 days ago
+			case 3: // Wednesday
+				daysToSubtract = 9 // Last Monday was 9 days ago
+			case 4: // Thursday
+				daysToSubtract = 10 // Last Monday was 10 days ago
+			case 5: // Friday
+				daysToSubtract = 11 // Last Monday was 11 days ago
+			case 6: // Saturday
+				daysToSubtract = 12 // Last Monday was 12 days ago
+			}
+			return p.result.AddDate(0, 0, -daysToSubtract), true, nil
 		}
 	}
 
-	// Handle "next {unit}" and "last {unit}" patterns
-	reNextUnit := regexp.MustCompile(`^next\s+(\w+)$`)
-	reLastUnit := regexp.MustCompile(`^last\s+(\w+)$`)
-
-	if matches := reNextUnit.FindStringSubmatch(str); len(matches) == 2 {
-		unit := matches[1]
-
-		// Check if it's a day of week
-		targetDay := getDayOfWeek(unit)
-		if targetDay >= 0 {
-			// Current day of week (0 = Sunday, 6 = Saturday)
-			currentDay := int(now.Weekday())
-			// Days until the next occurrence of targetDay
-			daysUntil := (targetDay - currentDay + 7) % 7
+	// Check if it's a day of the week
+	dayNum := getDayOfWeek(unitToken.Val)
+	if dayNum >= 0 {
+		// Handle day of week
+		currentDay := int(p.result.Weekday())
+		if isNext {
+			// Calculate days until the next occurrence
+			daysUntil := (dayNum - currentDay + 7) % 7
 			if daysUntil == 0 {
 				daysUntil = 7 // If today is the target day, go to next week
 			}
-
-			nextDayTime := now.AddDate(0, 0, daysUntil)
-			year, month, day := nextDayTime.Date()
-			return time.Date(year, month, day, 0, 0, 0, 0, loc), nil
-		}
-
-		// Handle other time units
-		switch unit {
-		case "month":
-			// Next month, same day and time
-			return now.AddDate(0, 1, 0), nil
-		case "year":
-			// Next year, same day and time
-			return now.AddDate(1, 0, 0), nil
-		default:
-			return time.Time{}, errors.New("unknown time unit for 'next': " + unit)
-		}
-	}
-
-	if matches := reLastUnit.FindStringSubmatch(str); len(matches) == 2 {
-		unit := matches[1]
-
-		// Check if it's a day of week
-		targetDay := getDayOfWeek(unit)
-		if targetDay >= 0 {
-			// Current day of week (0 = Sunday, 6 = Saturday)
-			currentDay := int(now.Weekday())
-			// Days since the last occurrence of targetDay
-			daysSince := (currentDay - targetDay + 7) % 7
+			nextDay := p.result.AddDate(0, 0, daysUntil)
+			year, month, day := nextDay.Date()
+			return time.Date(year, month, day, 0, 0, 0, 0, p.loc), true, nil
+		} else {
+			// Calculate days since the last occurrence
+			daysSince := (currentDay - dayNum + 7) % 7
 			if daysSince == 0 {
-				daysSince = 7 // If today is the target day, go to previous week
+				daysSince = 7 // If today is the target day, go to last week
 			}
-
-			lastDayTime := now.AddDate(0, 0, -daysSince)
-			year, month, day := lastDayTime.Date()
-			return time.Date(year, month, day, 0, 0, 0, 0, loc), nil
-		}
-
-		// Handle other time units
-		switch unit {
-		case "month":
-			// Last month, same day and time
-			return now.AddDate(0, -1, 0), nil
-		case "year":
-			// Last year, same day and time
-			return now.AddDate(-1, 0, 0), nil
-		default:
-			return time.Time{}, errors.New("unknown time unit for 'last': " + unit)
+			lastDay := p.result.AddDate(0, 0, -daysSince)
+			year, month, day := lastDay.Date()
+			return time.Date(year, month, day, 0, 0, 0, 0, p.loc), true, nil
 		}
 	}
 
-	// Try to parse standard date formats
-	// Format: YYYY-MM-DD
-	reIsoDate := regexp.MustCompile(`^(\d{4})-(\d{1,2})-(\d{1,2})$`)
-	if matches := reIsoDate.FindStringSubmatch(str); len(matches) == 4 {
-		year, _ := strconv.Atoi(matches[1])
-		month, _ := strconv.Atoi(matches[2])
-		day, _ := strconv.Atoi(matches[3])
-		return time.Date(year, time.Month(month), day, 0, 0, 0, 0, loc), nil
+	// Handle other time units
+	switch unitToken.Val {
+	case "month":
+		if isNext {
+			return p.result.AddDate(0, 1, 0), true, nil
+		} else {
+			return p.result.AddDate(0, -1, 0), true, nil
+		}
+	case "year":
+		if isNext {
+			return p.result.AddDate(1, 0, 0), true, nil
+		} else {
+			return p.result.AddDate(-1, 0, 0), true, nil
+		}
+	default:
+		return time.Time{}, false, fmt.Errorf("unknown time unit: %s", unitToken.Val)
+	}
+}
+
+// tryParseRelativeTime attempts to parse expressions like "+1 day" or "-3 weeks"
+func (p *Parser) tryParseRelativeTime() (time.Time, bool, error) {
+	if p.position >= len(p.tokens) {
+		return time.Time{}, false, nil
 	}
 
-	// Format: YYYY/MM/DD
-	reSlashDate := regexp.MustCompile(`^(\d{4})/(\d{1,2})/(\d{1,2})$`)
-	if matches := reSlashDate.FindStringSubmatch(str); len(matches) == 4 {
-		year, _ := strconv.Atoi(matches[1])
-		month, _ := strconv.Atoi(matches[2])
-		day, _ := strconv.Atoi(matches[3])
-		return time.Date(year, time.Month(month), day, 0, 0, 0, 0, loc), nil
+	// Check for +/- operator
+	token := p.tokens[p.position]
+	if token.Typ != TypeOperator || (token.Val != "+" && token.Val != "-") {
+		return time.Time{}, false, nil
 	}
 
-	// Format: MM/DD/YYYY
-	reUSDate := regexp.MustCompile(`^(\d{1,2})/(\d{1,2})/(\d{4})$`)
-	if matches := reUSDate.FindStringSubmatch(str); len(matches) == 4 {
-		month, _ := strconv.Atoi(matches[1])
-		day, _ := strconv.Atoi(matches[2])
-		year, _ := strconv.Atoi(matches[3])
-		return time.Date(year, time.Month(month), day, 0, 0, 0, 0, loc), nil
+	sign := 1
+	if token.Val == "-" {
+		sign = -1
+	}
+	p.position++
+
+	// Check for the amount
+	if p.position >= len(p.tokens) {
+		return time.Time{}, false, fmt.Errorf("expected amount after %s", token.Val)
 	}
 
-	// Format: January 15 2023 or Jan 15, 2023
+	amountToken := p.tokens[p.position]
+	if amountToken.Typ != TypeNumber {
+		return time.Time{}, false, fmt.Errorf("expected number after %s, got %s", token.Val, amountToken.Val)
+	}
+
+	amount, err := strconv.Atoi(amountToken.Val)
+	if err != nil {
+		return time.Time{}, false, fmt.Errorf("invalid number: %s", amountToken.Val)
+	}
+	amount *= sign
+	p.position++
+
+	// Skip whitespace
+	p.skipWhitespace()
+
+	// Check for the unit
+	if p.position >= len(p.tokens) {
+		return time.Time{}, false, fmt.Errorf("expected time unit after %d", amount)
+	}
+
+	unitToken := p.tokens[p.position]
+	if unitToken.Typ != TypeString {
+		return time.Time{}, false, fmt.Errorf("expected time unit after %d, got %s", amount, unitToken.Val)
+	}
+
+	p.position++
+
+	// Process the unit
+	unit := unitToken.Val
+	// Handle plural forms by removing trailing 's'
+	if strings.HasSuffix(unit, "s") {
+		unit = unit[:len(unit)-1]
+	}
+
+	switch unit {
+	case "day":
+		return p.result.AddDate(0, 0, amount), true, nil
+	case "week":
+		return p.result.AddDate(0, 0, amount*7), true, nil
+	case "month":
+		return p.result.AddDate(0, amount, 0), true, nil
+	case "year":
+		return p.result.AddDate(amount, 0, 0), true, nil
+	case "hour":
+		return p.result.Add(time.Duration(amount) * time.Hour), true, nil
+	case "minute":
+		return p.result.Add(time.Duration(amount) * time.Minute), true, nil
+	case "second":
+		return p.result.Add(time.Duration(amount) * time.Second), true, nil
+	default:
+		return time.Time{}, false, fmt.Errorf("unknown time unit: %s", unit)
+	}
+}
+
+// tryParseMonthNameFormat attempts to parse expressions like "January 15 2023" or "Jan 15, 2023"
+func (p *Parser) tryParseMonthNameFormat() (time.Time, bool, error) {
+	if p.position >= len(p.tokens) {
+		return time.Time{}, false, nil
+	}
+
+	// Check for a month name
+	monthToken := p.tokens[p.position]
+	if monthToken.Typ != TypeString {
+		return time.Time{}, false, nil
+	}
+
+	month, ok := getMonthByName(monthToken.Val)
+	if !ok {
+		return time.Time{}, false, nil
+	}
+	p.position++
+	p.skipWhitespace()
+
+	// Check for day number
+	if p.position >= len(p.tokens) {
+		return time.Time{}, false, fmt.Errorf("expected day after month name")
+	}
+
+	dayToken := p.tokens[p.position]
+	if dayToken.Typ != TypeNumber {
+		return time.Time{}, false, fmt.Errorf("expected day number after month name, got %s", dayToken.Val)
+	}
+
+	day, err := strconv.Atoi(dayToken.Val)
+	if err != nil {
+		return time.Time{}, false, fmt.Errorf("invalid day number: %s", dayToken.Val)
+	}
+	p.position++
+
+	// Skip optional punctuation (comma) and whitespace
+	if p.position < len(p.tokens) && p.tokens[p.position].Typ == TypePunctuation {
+		p.position++
+	}
+	p.skipWhitespace()
+
+	// Check for year
+	if p.position >= len(p.tokens) {
+		return time.Time{}, false, fmt.Errorf("expected year after day number")
+	}
+
+	yearToken := p.tokens[p.position]
+	if yearToken.Typ != TypeNumber {
+		return time.Time{}, false, fmt.Errorf("expected year after day number, got %s", yearToken.Val)
+	}
+
+	year, err := strconv.Atoi(yearToken.Val)
+	if err != nil {
+		return time.Time{}, false, fmt.Errorf("invalid year: %s", yearToken.Val)
+	}
+	p.position++
+
+	return time.Date(year, month, day, 0, 0, 0, 0, p.loc), true, nil
+}
+
+// tryMatch checks if the tokens at the current position match a pattern
+func (p *Parser) tryMatch(matcher func([]Token, int) bool) bool {
+	if p.position >= len(p.tokens) {
+		return false
+	}
+	return matcher(p.tokens, p.position)
+}
+
+// getMonthByName converts a month name to its number
+func getMonthByName(name string) (time.Month, bool) {
 	monthNames := map[string]time.Month{
 		"january":   time.January,
 		"jan":       time.January,
@@ -320,82 +612,13 @@ func StrToTime(str string, opts ...Option) (time.Time, error) {
 		"dec":       time.December,
 	}
 
-	reLongDate := regexp.MustCompile(`^([a-z]+)\s+(\d{1,2})(?:,?)\s+(\d{4})$`)
-	if matches := reLongDate.FindStringSubmatch(str); len(matches) == 4 {
-		monthStr := matches[1]
-		month, ok := monthNames[monthStr]
-		if !ok {
-			return time.Time{}, fmt.Errorf("unknown month: %s", monthStr)
-		}
-		day, _ := strconv.Atoi(matches[2])
-		year, _ := strconv.Atoi(matches[3])
-		return time.Date(year, month, day, 0, 0, 0, 0, loc), nil
-	}
-
-	// Try handling a normalized version of the string
-	normalized := regexp.MustCompile(`\s+`).ReplaceAllString(str, " ")
-	if normalized != str {
-		// Try all patterns again with normalized string
-		return StrToTime(normalized, opts...)
-	}
-
-	// We need more complex parsing for other formats
-	return time.Time{}, errors.New("unknown or unsupported time format: " + origStr)
-}
-
-// processCompoundExpression handles expressions with multiple parts like "next year + 4 days" or "next year+4 days"
-func processCompoundExpression(str string, now time.Time, loc *time.Location, opts []Option) (time.Time, error) {
-	// Use regex to split the string at +/- operators, preserving the operators
-	re := regexp.MustCompile(`([+-])`)
-	parts := re.Split(str, -1)
-	operators := re.FindAllString(str, -1)
-	
-	if len(parts) <= 1 {
-		return time.Time{}, errors.New("invalid compound expression: " + str)
-	}
-	
-	// Process the first part to get a base time
-	baseTime, err := StrToTime(parts[0], append(opts, Rel(now))...)
-	if err != nil {
-		return time.Time{}, err
-	}
-	
-	// Process the remaining parts sequentially with their operators
-	resultTime := baseTime
-	for i := 1; i < len(parts); i++ {
-		if i-1 >= len(operators) {
-			break // No more operators
-		}
-		
-		operator := operators[i-1]
-		part := strings.TrimSpace(parts[i])
-		
-		if part == "" {
-			continue // Skip empty parts
-		}
-		
-		// Add the operator prefix to ensure it's treated correctly
-		adjustmentStr := operator + " " + part
-		
-		// Process this part with the previous result as reference
-		nextTime, err := StrToTime(adjustmentStr, append(opts, Rel(resultTime))...)
-		if err != nil {
-			// Try an alternative approach by adding the operator directly
-			adjustmentStr = operator + part
-			nextTime, err = StrToTime(adjustmentStr, append(opts, Rel(resultTime))...)
-			if err != nil {
-				return time.Time{}, err
-			}
-		}
-		resultTime = nextTime
-	}
-	
-	return resultTime, nil
+	month, ok := monthNames[strings.ToLower(name)]
+	return month, ok
 }
 
 // getDayOfWeek converts day name to day number (0 = Sunday, 6 = Saturday)
 func getDayOfWeek(day string) int {
-	switch day {
+	switch strings.ToLower(day) {
 	case "sunday", "sun":
 		return 0
 	case "monday", "mon":
