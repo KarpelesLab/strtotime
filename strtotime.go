@@ -202,6 +202,17 @@ func (p *Parser) Parse() (time.Time, error) {
 			}
 		}
 		
+		// Try implicit positive relative time (e.g., "4 days" without explicit +)
+		if !parsed {
+			if t, ok, err := p.tryParseImplicitRelativeTime(); ok {
+				if err != nil {
+					return time.Time{}, err
+				}
+				p.result = t
+				parsed = true
+			}
+		}
+		
 		// Try month only format (e.g., "January" or "Feb")
 		if !parsed {
 			if t, ok, err := p.tryParseMonthOnlyFormat(); ok {
@@ -483,6 +494,68 @@ func (p *Parser) tryParseRelativeTime() (time.Time, bool, error) {
 		return time.Time{}, false, fmt.Errorf("invalid number: %s", amountToken.Val)
 	}
 	amount *= sign
+	p.position++
+
+	// Skip whitespace
+	p.skipWhitespace()
+
+	// Check for the unit
+	if p.position >= len(p.tokens) {
+		return time.Time{}, false, fmt.Errorf("expected time unit after %d", amount)
+	}
+
+	unitToken := p.tokens[p.position]
+	if unitToken.Typ != TypeString {
+		return time.Time{}, false, fmt.Errorf("expected time unit after %d, got %s", amount, unitToken.Val)
+	}
+
+	p.position++
+
+	// Process the unit
+	unit := unitToken.Val
+	// Handle plural forms by removing trailing 's'
+	if strings.HasSuffix(unit, "s") {
+		unit = unit[:len(unit)-1]
+	}
+
+	switch unit {
+	case "day":
+		return p.result.AddDate(0, 0, amount), true, nil
+	case "week":
+		return p.result.AddDate(0, 0, amount*7), true, nil
+	case "month":
+		return p.result.AddDate(0, amount, 0), true, nil
+	case "year":
+		return p.result.AddDate(amount, 0, 0), true, nil
+	case "hour":
+		return p.result.Add(time.Duration(amount) * time.Hour), true, nil
+	case "minute":
+		return p.result.Add(time.Duration(amount) * time.Minute), true, nil
+	case "second":
+		return p.result.Add(time.Duration(amount) * time.Second), true, nil
+	default:
+		return time.Time{}, false, fmt.Errorf("unknown time unit: %s", unit)
+	}
+}
+
+// tryParseImplicitRelativeTime attempts to parse expressions like "4 days" or "10 minutes" (without explicit + operator)
+func (p *Parser) tryParseImplicitRelativeTime() (time.Time, bool, error) {
+	if p.position >= len(p.tokens) {
+		return time.Time{}, false, nil
+	}
+
+	// Check for a number (the amount)
+	token := p.tokens[p.position]
+	if token.Typ != TypeNumber {
+		return time.Time{}, false, nil
+	}
+
+	amount, err := strconv.Atoi(token.Val)
+	if err != nil {
+		return time.Time{}, false, fmt.Errorf("invalid number: %s", token.Val)
+	}
+	
+	// Always treat as positive (implicit +)
 	p.position++
 
 	// Skip whitespace
