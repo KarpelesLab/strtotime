@@ -38,17 +38,34 @@ func StrToTime(str string, opts ...Option) (time.Time, error) {
 
 	// Try Unix timestamp format (@timestamp)
 	if len(str) > 0 && str[0] == '@' {
-		// Parse the Unix timestamp format (e.g., "@1121373041")
+		// Parse the Unix timestamp format (e.g., "@1121373041" or "@1121373041.5")
 		unixTimeStr := str[1:]
 		
 		// Check if there's a timezone specification after the timestamp
 		tzParts := strings.SplitN(unixTimeStr, " ", 2)
 		timestamp := tzParts[0]
 		
-		// Parse the Unix timestamp
-		unixTime, err := strconv.ParseInt(timestamp, 10, 64)
-		if err == nil {
-			result := time.Unix(unixTime, 0).In(loc)
+		// Check if timestamp has fractional seconds
+		if idx := strings.Index(timestamp, "."); idx != -1 {
+			// Parse the whole seconds part
+			unixTime, err := strconv.ParseInt(timestamp[:idx], 10, 64)
+			if err != nil {
+				// If we can't parse the integer part, don't try to handle as Unix timestamp
+				goto nextFormat
+			}
+			
+			// Parse the fractional part as a float
+			fracPart, err := strconv.ParseFloat("0."+timestamp[idx+1:], 64)
+			if err != nil {
+				// If we can't parse the fraction, just use the integer part
+				fracPart = 0.0
+			}
+			
+			// Convert fraction to nanoseconds (range: 0-999999999)
+			nanoSec := int64(fracPart * 1e9)
+			
+			// Create the time with the proper Unix seconds and nanoseconds
+			result := time.Unix(unixTime, nanoSec).In(loc)
 			
 			// If there's a timezone specified, try to use it
 			if len(tzParts) > 1 && tzParts[1] != "" {
@@ -58,8 +75,24 @@ func StrToTime(str string, opts ...Option) (time.Time, error) {
 			}
 			
 			return result, nil
+		} else {
+			// No fractional part, parse as an integer
+			unixTime, err := strconv.ParseInt(timestamp, 10, 64)
+			if err == nil {
+				result := time.Unix(unixTime, 0).In(loc)
+				
+				// If there's a timezone specified, try to use it
+				if len(tzParts) > 1 && tzParts[1] != "" {
+					if tzLoc, found := tryParseTimezone(tzParts[1]); found {
+						result = result.In(tzLoc)
+					}
+				}
+				
+				return result, nil
+			}
 		}
 	}
+nextFormat:
 	
 	// Try European date format like "24.11.22"
 	if t, ok := parseEuropeanFormat(str, loc); ok {

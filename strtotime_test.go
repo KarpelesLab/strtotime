@@ -252,3 +252,43 @@ func abs(x int64) int64 {
 	}
 	return x
 }
+
+func TestUnixTimestampFormats(t *testing.T) {
+	// Test parsing Unix timestamps with and without fractional seconds
+	tests := []struct {
+		input           string
+		expectedSeconds int64
+		expectedNanos   int
+	}{
+		{"@1672531200", 1672531200, 0},                  // 2023-01-01 00:00:00 UTC
+		{"@1672531200.5", 1672531200, 500000000},        // With .5 seconds
+		{"@1672531200.123", 1672531200, 123000000},      // With milliseconds
+		{"@1672531200.123456", 1672531200, 123456000},   // With microseconds
+		{"@1672531200.123456789", 1672531200, 123456789}, // With nanoseconds
+		{"@1672531200.000001", 1672531200, 1000},        // Very small fraction
+		{"@1672531200.999999999", 1672531200, 999999999}, // Maximum precision
+	}
+
+	for _, test := range tests {
+		t.Run(test.input, func(t *testing.T) {
+			result, err := StrToTime(test.input, InTZ(time.UTC))
+			if err != nil {
+				t.Fatalf("Error parsing '%s': %v", test.input, err)
+			}
+
+			if result.Unix() != test.expectedSeconds {
+				t.Errorf("For input '%s': expected seconds %d, got %d",
+					test.input,
+					test.expectedSeconds,
+					result.Unix())
+			}
+
+			if result.Nanosecond() != test.expectedNanos {
+				t.Errorf("For input '%s': expected nanoseconds %d, got %d",
+					test.input,
+					test.expectedNanos,
+					result.Nanosecond())
+			}
+		})
+	}
+}
