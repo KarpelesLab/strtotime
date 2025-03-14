@@ -10,7 +10,7 @@ A Go library that parses human-readable date/time strings into `time.Time` objec
 * Supports relative dates ("tomorrow", "next Friday", "+2 days")
 * Handles various date formats (ISO, US, European)
 * Custom base time reference support
-* Timezone specification
+* Timezone specification (3-letter codes and IANA timezone names)
 * Extensible architecture
 
 ## Installation
@@ -84,7 +84,7 @@ func main() {
     }
     fmt.Printf("Next month from 2023-01-01: %s\n", t.Format("2006-01-02"))
     
-    // Specify a timezone
+    // Specify a timezone as an option
     loc, _ := time.LoadLocation("America/New_York")
     t, err = strtotime.StrToTime("today", strtotime.TZ{Location: loc})
     if err != nil {
@@ -92,6 +92,14 @@ func main() {
         return
     }
     fmt.Printf("Today in New York: %s\n", t.Format("2006-01-02 15:04:05 MST"))
+    
+    // Or specify timezone in the string
+    t, err = strtotime.StrToTime("January 1 2023 EST")
+    if err != nil {
+        fmt.Printf("Error: %s\n", err)
+        return
+    }
+    fmt.Printf("Date with timezone: %s\n", t.Format("2006-01-02 15:04:05 MST"))
     
     // Combine multiple options
     t, err = strtotime.StrToTime("tomorrow", strtotime.Rel(baseTime), strtotime.TZ{Location: loc})
@@ -129,6 +137,7 @@ The library can understand many different formats and expressions, including:
 - Slash format: `2023/05/15`
 - US format: `05/15/2023`
 - European format: `15.05.2023`
+- With timezone: `January 1 2023 EST`, `June 1 1985 16:30:00 Europe/Paris`
 
 ### Month Names
 - Full names: `January 15 2023`
@@ -151,6 +160,14 @@ The library recognizes various formats for time units:
 - Plural forms: days, weeks, months, years, hours, minutes, seconds
 - Abbreviations: d, w, wk, m, y, yr, h, hr, min, sec
 - Common variations: hrs, mon, mins, secs
+
+## Timezone Support
+
+The library supports multiple timezone formats:
+- 3-letter abbreviations: `EST`, `PST`, `GMT`, `UTC`, etc.
+- IANA timezone names: `America/New_York`, `Europe/Paris`, `Asia/Tokyo`, etc.
+- Timezone can be specified in the string: `January 1 2023 EST`, `June 1 1985 16:30:00 Europe/Paris`
+- Timezone can also be provided as an option: `strtotime.TZ{Location: loc}`
 
 ## Error Handling
 

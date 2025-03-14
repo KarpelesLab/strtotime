@@ -80,6 +80,11 @@ func StrToTime(str string, opts ...Option) (time.Time, error) {
 		return time.Date(year, month, day, 0, 0, 0, 0, loc), nil
 	}
 	
+	// Try date with timezone format
+	if t, ok := parseWithTimezone(str, loc); ok {
+		return t, nil
+	}
+	
 	// Try standard date formats
 	if t, ok := parseISOFormat(str, loc); ok {
 		return t, nil
@@ -215,6 +220,7 @@ type Parser struct {
 	position int
 	result   time.Time
 	loc      *time.Location
+	tzFound  bool // Flag to indicate if a timezone was parsed from the input
 }
 
 // Parse processes the token stream and returns a time.Time result
@@ -239,13 +245,22 @@ func (p *Parser) Parse() (time.Time, error) {
 		// Try to parse each expression type
 		parsed := false
 
-		// Try "next/last" expressions
-		if t, ok, err := p.tryParseNextLastExpression(); ok {
-			if err != nil {
-				return time.Time{}, err
+		// Try to parse timezone
+		if !p.tzFound {
+			if ok := p.tryParseTimezone(); ok {
+				parsed = true
 			}
-			p.result = t
-			parsed = true
+		}
+
+		// Try "next/last" expressions
+		if !parsed {
+			if t, ok, err := p.tryParseNextLastExpression(); ok {
+				if err != nil {
+					return time.Time{}, err
+				}
+				p.result = t
+				parsed = true
+			}
 		}
 
 		// Try +/- relative time
@@ -331,6 +346,77 @@ func (p *Parser) consume() *Token {
 	token := &p.tokens[p.position]
 	p.position++
 	return token
+}
+
+// tryParseTimezone attempts to parse a timezone from the token stream
+// This handles both abbreviations (PST, EST) and full names (America/New_York, Europe/Paris)
+func (p *Parser) tryParseTimezone() bool {
+	if p.position >= len(p.tokens) {
+		return false
+	}
+
+	// Save the current position in case we need to backtrack
+	startPos := p.position
+	
+	// Try parsing a single token timezone (like "EST", "GMT", etc.)
+	if p.position < len(p.tokens) && p.tokens[p.position].Typ == TypeString {
+		tzString := p.tokens[p.position].Val
+		if loc, found := tryParseTimezone(tzString); found {
+			p.loc = loc
+			p.tzFound = true
+			p.position++
+			
+			// Update result to be in the new timezone
+			p.result = p.result.In(p.loc)
+			return true
+		}
+	}
+	
+	// Try parsing a full timezone name with slashes (like "America/New_York")
+	// This could be multiple tokens like "Europe" "/" "Paris"
+	if p.position+2 < len(p.tokens) && 
+	   p.tokens[p.position].Typ == TypeString && 
+	   p.tokens[p.position+1].Typ == TypeOperator && 
+	   p.tokens[p.position+1].Val == "/" && 
+	   p.tokens[p.position+2].Typ == TypeString {
+		
+		// Construct the timezone string with slash
+		tzString := p.tokens[p.position].Val + "/" + p.tokens[p.position+2].Val
+		
+		if loc, found := tryParseTimezone(tzString); found {
+			p.loc = loc
+			p.tzFound = true
+			p.position += 3 // Skip all three tokens
+			
+			// Update result to be in the new timezone
+			p.result = p.result.In(p.loc)
+			return true
+		}
+	}
+	
+	// Try parsing multi-word timezone names (like "Eastern Time")
+	if p.position+2 < len(p.tokens) && 
+	   p.tokens[p.position].Typ == TypeString && 
+	   p.tokens[p.position+1].Typ == TypeWhitespace && 
+	   p.tokens[p.position+2].Typ == TypeString {
+		
+		// Try to combine the tokens to form a full name
+		tzString := p.tokens[p.position].Val + " " + p.tokens[p.position+2].Val
+		
+		if loc, found := tryParseTimezone(tzString); found {
+			p.loc = loc
+			p.tzFound = true
+			p.position += 3 // Skip all three tokens
+			
+			// Update result to be in the new timezone
+			p.result = p.result.In(p.loc)
+			return true
+		}
+	}
+	
+	// Restore the position if we couldn't parse a timezone
+	p.position = startPos
+	return false
 }
 
 
@@ -785,7 +871,7 @@ func (p *Parser) tryParseMonthOnlyFormat() (time.Time, bool, error) {
 	return time.Date(year, month, day, 0, 0, 0, 0, p.loc), true, nil
 }
 
-// tryParseMonthNameFormat attempts to parse expressions like "January 15 2023", "Jan 15, 2023", or "April 4th"
+// tryParseMonthNameFormat attempts to parse expressions like "January 15 2023", "Jan 15, 2023", "April 4th", or "June 1 1985 16:30:00 Europe/Paris"
 func (p *Parser) tryParseMonthNameFormat() (time.Time, bool, error) {
 	if p.position >= len(p.tokens) {
 		return time.Time{}, false, nil
@@ -850,7 +936,56 @@ func (p *Parser) tryParseMonthNameFormat() (time.Time, bool, error) {
 		}
 	}
 
-	return time.Date(year, month, day, 0, 0, 0, 0, p.loc), true, nil
+	// Default time components
+	hour, minute, second := 0, 0, 0
+
+	// Check for time (optional)
+	// Format: HH:MM:SS
+	p.skipWhitespace()
+	if p.position+4 < len(p.tokens) && 
+	   p.tokens[p.position].Typ == TypeNumber && // HH
+	   p.tokens[p.position+1].Typ == TypeOperator && p.tokens[p.position+1].Val == ":" &&
+	   p.tokens[p.position+2].Typ == TypeNumber { // MM
+		
+		// Parse hour
+		hourVal, err := strconv.Atoi(p.tokens[p.position].Val)
+		if err == nil && hourVal >= 0 && hourVal <= 23 {
+			hour = hourVal
+			p.position += 2 // Skip HH:
+			
+			// Parse minute
+			minuteVal, err := strconv.Atoi(p.tokens[p.position].Val)
+			if err == nil && minuteVal >= 0 && minuteVal <= 59 {
+				minute = minuteVal
+				p.position++
+				
+				// Check for seconds (optional)
+				if p.position+2 < len(p.tokens) && 
+				   p.tokens[p.position].Typ == TypeOperator && p.tokens[p.position].Val == ":" &&
+				   p.tokens[p.position+1].Typ == TypeNumber {
+					
+					p.position++ // Skip :
+					secondVal, err := strconv.Atoi(p.tokens[p.position].Val)
+					if err == nil && secondVal >= 0 && secondVal <= 59 {
+						second = secondVal
+						p.position++
+					}
+				}
+			}
+		}
+	}
+
+	// Check for timezone (optional)
+	p.skipWhitespace()
+	tzStartPos := p.position
+	if ok := p.tryParseTimezone(); ok {
+		// Timezone was successfully parsed and p.loc has been updated
+	} else {
+		// No timezone found, restore position
+		p.position = tzStartPos
+	}
+
+	return time.Date(year, month, day, hour, minute, second, 0, p.loc), true, nil
 }
 
 // tryMatch checks if the tokens at the current position match a pattern
