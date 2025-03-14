@@ -104,6 +104,19 @@ func mustLoadLocation(name string) *time.Location {
 // tryParseTimezone attempts to parse a timezone from a string
 // It handles both abbreviations (PST, EST) and full names (America/New_York, Europe/Paris)
 func tryParseTimezone(tzString string) (*time.Location, bool) {
+	// Empty or too short timezone strings are invalid
+	if len(tzString) < 2 {
+		return nil, false
+	}
+	
+	// If the timezone contains invalid characters, reject it immediately
+	for _, c := range tzString {
+		// Valid timezone characters: alphanumeric, /, _, -, + and spaces
+		if !isValidTimezoneChar(c) {
+			return nil, false
+		}
+	}
+	
 	// Normalize to lowercase for case-insensitive matching
 	tzLower := strings.ToLower(tzString)
 
@@ -134,6 +147,11 @@ func tryParseTimezone(tzString string) (*time.Location, bool) {
 	// Strategy 4: Handle region/city format with proper casing
 	parts := strings.Split(tzString, "/")
 	if len(parts) == 2 {
+		// Check that both parts are non-empty
+		if len(parts[0]) == 0 || len(parts[1]) == 0 {
+			return nil, false
+		}
+		
 		// Convert to proper case: first letter uppercase, rest lowercase
 		region := strings.Title(strings.ToLower(parts[0]))
 		city := strings.Title(strings.ToLower(parts[1]))
@@ -151,6 +169,11 @@ func tryParseTimezone(tzString string) (*time.Location, bool) {
 		parts := strings.Split(tzNoUnderscores, "/")
 
 		if len(parts) == 2 {
+			// Check that both parts are non-empty
+			if len(parts[0]) == 0 || len(parts[1]) == 0 {
+				return nil, false
+			}
+			
 			// Title case each part and replace spaces with underscore
 			region := strings.Title(strings.ToLower(parts[0]))
 			city := strings.Title(strings.ToLower(parts[1]))
@@ -165,4 +188,12 @@ func tryParseTimezone(tzString string) (*time.Location, bool) {
 	}
 
 	return nil, false
+}
+
+// isValidTimezoneChar checks if a character is valid in a timezone string
+func isValidTimezoneChar(c rune) bool {
+	return (c >= 'a' && c <= 'z') || 
+	       (c >= 'A' && c <= 'Z') || 
+	       (c >= '0' && c <= '9') || 
+	       c == '/' || c == '_' || c == '-' || c == '+' || c == ' '
 }

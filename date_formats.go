@@ -53,17 +53,24 @@ func parseDateFormat(str string, format string, loc *time.Location) (time.Time, 
 	}
 
 	day, err := strconv.Atoi(parts[dayIdx])
-	if err != nil || day < 1 || day > 31 {
+	if err != nil || day < 1 {
 		return time.Time{}, false
 	}
-
+	
 	// Handle 2-digit years
 	if year < 100 {
 		year = parseTwoDigitYear(year)
 	}
-
+	
+	// Validate the date using our utility function
+	if !IsValidDate(year, month, day) {
+		return time.Time{}, false
+	}
+	
+	// If we made it here, the date is valid
 	return time.Date(year, time.Month(month), day, 0, 0, 0, 0, loc), true
 }
+
 
 // isNumericPattern checks if a string matches a specific pattern of digits with separator
 func isNumericPattern(str string, firstPartLen int, separator rune) bool {
@@ -107,16 +114,56 @@ func isNumericPattern(str string, firstPartLen int, separator rune) bool {
 
 // parseISOFormat tries to parse a ISO format date (YYYY-MM-DD)
 func parseISOFormat(str string, loc *time.Location) (time.Time, bool) {
-	if len(str) >= 8 && len(str) <= 10 && isNumericPattern(str, 4, '-') {
-		return parseDateFormat(str, "ymd", loc)
+	// Check basic pattern first
+	if len(str) >= 8 && len(str) <= 10 && strings.Count(str, "-") == 2 {
+		parts := strings.Split(str, "-")
+		if len(parts) == 3 {
+			// Validate each part - must be numeric
+			year, yearErr := strconv.Atoi(parts[0])
+			month, monthErr := strconv.Atoi(parts[1])
+			day, dayErr := strconv.Atoi(parts[2])
+			
+			// Check for parsing errors
+			if yearErr != nil || monthErr != nil || dayErr != nil {
+				return time.Time{}, false
+			}
+			
+			// Validate date components
+			if !IsValidDate(year, month, day) {
+				return time.Time{}, false
+			}
+			
+			// Valid ISO format date
+			return time.Date(year, time.Month(month), day, 0, 0, 0, 0, loc), true
+		}
 	}
 	return time.Time{}, false
 }
 
 // parseSlashFormat tries to parse a slash format date (YYYY/MM/DD)
 func parseSlashFormat(str string, loc *time.Location) (time.Time, bool) {
-	if len(str) >= 8 && len(str) <= 10 && isNumericPattern(str, 4, '/') {
-		return parseDateFormat(str, "ymd", loc)
+	// Check basic pattern first
+	if len(str) >= 8 && len(str) <= 10 && strings.Count(str, "/") == 2 {
+		parts := strings.Split(str, "/")
+		if len(parts) == 3 && len(parts[0]) == 4 { // First part must be 4-digit year
+			// Validate each part - must be numeric
+			year, yearErr := strconv.Atoi(parts[0])
+			month, monthErr := strconv.Atoi(parts[1])
+			day, dayErr := strconv.Atoi(parts[2])
+			
+			// Check for parsing errors
+			if yearErr != nil || monthErr != nil || dayErr != nil {
+				return time.Time{}, false
+			}
+			
+			// Validate date components
+			if !IsValidDate(year, month, day) {
+				return time.Time{}, false
+			}
+			
+			// Valid ISO format date
+			return time.Date(year, time.Month(month), day, 0, 0, 0, 0, loc), true
+		}
 	}
 	return time.Time{}, false
 }
@@ -127,7 +174,23 @@ func parseUSFormat(str string, loc *time.Location) (time.Time, bool) {
 		// Check if the last part has 4 digits (for year)
 		parts := strings.Split(str, "/")
 		if len(parts) == 3 && len(parts[2]) == 4 {
-			return parseDateFormat(str, "mdy", loc)
+			// Validate each part - must be numeric
+			month, monthErr := strconv.Atoi(parts[0])
+			day, dayErr := strconv.Atoi(parts[1])
+			year, yearErr := strconv.Atoi(parts[2])
+			
+			// Check for parsing errors
+			if yearErr != nil || monthErr != nil || dayErr != nil {
+				return time.Time{}, false
+			}
+			
+			// Validate date components
+			if !IsValidDate(year, month, day) {
+				return time.Time{}, false
+			}
+			
+			// Valid US format date
+			return time.Date(year, time.Month(month), day, 0, 0, 0, 0, loc), true
 		}
 	}
 	return time.Time{}, false
@@ -146,7 +209,29 @@ func parseEuropeanFormat(str string, loc *time.Location) (time.Time, bool) {
 					}
 				}
 			}
-			return parseDateFormat(str, "dmy", loc)
+			
+			// Parse the components
+			day, dayErr := strconv.Atoi(parts[0])
+			month, monthErr := strconv.Atoi(parts[1])
+			year, yearErr := strconv.Atoi(parts[2])
+			
+			// Check for parsing errors
+			if yearErr != nil || monthErr != nil || dayErr != nil {
+				return time.Time{}, false
+			}
+			
+			// Handle 2-digit years
+			if year < 100 {
+				year = parseTwoDigitYear(year)
+			}
+			
+			// Validate date components
+			if !IsValidDate(year, month, day) {
+				return time.Time{}, false
+			}
+			
+			// Valid European format date
+			return time.Date(year, time.Month(month), day, 0, 0, 0, 0, loc), true
 		}
 	}
 	return time.Time{}, false

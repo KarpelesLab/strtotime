@@ -1,6 +1,7 @@
 package strtotime
 
 import (
+	"errors"
 	"fmt"
 	"regexp"
 	"strconv"
@@ -121,16 +122,25 @@ nextFormat:
 	if matches := dateTimeRe.FindStringSubmatch(str); matches != nil {
 		// Parse the date part
 		datePart := matches[1]
-		hour, _ := strconv.Atoi(matches[2])
-		minute, _ := strconv.Atoi(matches[3])
-		second, _ := strconv.Atoi(matches[4])
+		hour, errH := strconv.Atoi(matches[2])
+		minute, errM := strconv.Atoi(matches[3])
+		second, errS := strconv.Atoi(matches[4])
+		
+		// Validate time components
+		if errH != nil || hour < 0 || hour > 23 || 
+		   errM != nil || minute < 0 || minute > 59 || 
+		   errS != nil || second < 0 || second > 59 {
+			return time.Time{}, fmt.Errorf("invalid time components in datetime: %s", str)
+		}
 		
 		// Parse the date
 		t, ok := parseISOFormat(datePart, loc)
-		if ok {
-			// Add the time components
-			return time.Date(t.Year(), t.Month(), t.Day(), hour, minute, second, 0, loc), nil
+		if !ok {
+			return time.Time{}, fmt.Errorf("invalid date format in datetime: %s", str)
 		}
+		
+		// Add the time components
+		return time.Date(t.Year(), t.Month(), t.Day(), hour, minute, second, 0, loc), nil
 	}
 	
 	// Try date with timezone format
@@ -138,7 +148,8 @@ nextFormat:
 		return t, nil
 	}
 
-	// Try standard date formats
+	// Try standard date formats - the string should be directly validated by these functions
+	// Certain irregular date formats like "2023-13" will just fall through
 	if t, ok := parseISOFormat(str, loc); ok {
 		return t, nil
 	}
@@ -475,9 +486,9 @@ func (p *Parser) tryParseStandardDate() (time.Time, bool, error) {
 		return time.Time{}, false, nil
 	}
 	
-	// Validate date components
-	if month < 1 || month > 12 || day < 1 || day > 31 {
-		return time.Time{}, false, nil
+	// Validate date components using our utility function
+	if !IsValidDate(year, month, day) {
+		return time.Time{}, false, NewInvalidDateError(year, month, day)
 	}
 	
 	// Advance position past the parsed date
@@ -705,6 +716,11 @@ func parseCompoundExpression(str string, now time.Time, opts []Option) (time.Tim
 		parts = append(parts, currentPart)
 	}
 	
+	// Validate that we have at least one part and one operator
+	if len(parts) < 2 || len(operators) < 1 {
+		return time.Time{}, errors.New("invalid compound expression format")
+	}
+	
 	// Process the first part
 	result, err := StrToTime(parts[0], append(opts, Rel(now))...)
 	if err != nil {
@@ -713,6 +729,11 @@ func parseCompoundExpression(str string, now time.Time, opts []Option) (time.Tim
 	
 	// Process each remaining part with its operator
 	for i := 0; i < len(operators); i++ {
+		// Check if we have a corresponding part for this operator
+		if i+1 >= len(parts) {
+			return time.Time{}, errors.New("missing operand after operator in compound expression")
+		}
+		
 		// Apply the operator to the part
 		opPart := operators[i] + parts[i+1]
 		nextResult, err := StrToTime(opPart, append(opts, Rel(result))...)
@@ -989,6 +1010,11 @@ func (p *Parser) tryParseMonthNameFormat() (time.Time, bool, error) {
 			year = yearVal
 			p.position++
 		}
+	}
+
+	// Validate date components before returning
+	if !IsValidDate(year, int(month), day) {
+		return time.Time{}, false, fmt.Errorf("invalid date: %s %d, %d", month, day, year)
 	}
 
 	// Default time components

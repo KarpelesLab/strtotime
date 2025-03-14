@@ -19,10 +19,17 @@ func parseWithTimezone(str string, loc *time.Location) (time.Time, bool) {
 	if matches := dateTimeRe.FindStringSubmatch(str); matches != nil {
 		// Parse the date part
 		datePart := matches[1]
-		hour, _ := strconv.Atoi(matches[2])
-		minute, _ := strconv.Atoi(matches[3])
-		second, _ := strconv.Atoi(matches[4])
+		hour, errH := strconv.Atoi(matches[2])
+		minute, errM := strconv.Atoi(matches[3])
+		second, errS := strconv.Atoi(matches[4])
 		tzString := matches[5]
+		
+		// Validate time components
+		if errH != nil || hour < 0 || hour > 23 || 
+		   errM != nil || minute < 0 || minute > 59 || 
+		   errS != nil || second < 0 || second > 59 {
+			return time.Time{}, false
+		}
 		
 		// Parse the date
 		t, ok := parseISOFormat(datePart, loc)
@@ -33,11 +40,10 @@ func parseWithTimezone(str string, loc *time.Location) (time.Time, bool) {
 		// Add the time components
 		t = time.Date(t.Year(), t.Month(), t.Day(), hour, minute, second, 0, t.Location())
 		
-		// Parse timezone
+		// Parse timezone - require valid timezone with strict validation
 		tzLoc, found := tryParseTimezone(tzString)
 		if !found {
-			// If we couldn't parse the timezone, keep the original location
-			tzLoc = loc
+			return time.Time{}, false
 		}
 		
 		// Adjust to the timezone
@@ -47,19 +53,26 @@ func parseWithTimezone(str string, loc *time.Location) (time.Time, bool) {
 	// Try just time + timezone (e.g., "22:30:41 GMT")
 	timeOnlyRe := regexp.MustCompile(`^(\d{1,2}):(\d{1,2})(?::(\d{1,2}))?\s+([a-zA-Z0-9/_.]+)$`)
 	if matches := timeOnlyRe.FindStringSubmatch(str); matches != nil {
-		hour, _ := strconv.Atoi(matches[1])
-		minute, _ := strconv.Atoi(matches[2])
+		hour, errH := strconv.Atoi(matches[1])
+		minute, errM := strconv.Atoi(matches[2])
 		second := 0
+		var errS error
 		if matches[3] != "" {
-			second, _ = strconv.Atoi(matches[3])
+			second, errS = strconv.Atoi(matches[3])
 		}
 		tzString := matches[4]
 		
-		// Parse timezone
+		// Validate time components
+		if errH != nil || hour < 0 || hour > 23 || 
+		   errM != nil || minute < 0 || minute > 59 || 
+		   (matches[3] != "" && (errS != nil || second < 0 || second > 59)) {
+			return time.Time{}, false
+		}
+		
+		// Parse timezone - require valid timezone with strict validation
 		tzLoc, found := tryParseTimezone(tzString)
 		if !found {
-			// If we couldn't parse the timezone, keep the original location
-			tzLoc = loc
+			return time.Time{}, false
 		}
 		
 		// Use current date with the specified time
@@ -94,7 +107,24 @@ func parseFullDateTimeWithTimezone(str string, loc *time.Location) (time.Time, b
 		}
 
 		year, err := strconv.Atoi(yearStr)
-		if err != nil {
+		if err != nil || year < 1 || year > 9999 {
+			return time.Time{}, false
+		}
+		
+		// Check if date is valid (e.g., February 29 in non-leap years)
+		maxDays := 31
+		switch month {
+		case time.April, time.June, time.September, time.November:
+			maxDays = 30
+		case time.February:
+			if IsLeapYear(year) {
+				maxDays = 29
+			} else {
+				maxDays = 28
+			}
+		}
+		
+		if day > maxDays {
 			return time.Time{}, false
 		}
 
@@ -130,8 +160,8 @@ func parseFullDateTimeWithTimezone(str string, loc *time.Location) (time.Time, b
 		tzString := matches[7]
 		tzLoc, found := tryParseTimezone(tzString)
 		if !found {
-			// If we couldn't parse the timezone, try with the original location
-			tzLoc = loc
+			// Timezone must be valid
+			return time.Time{}, false
 		}
 
 		// Create the time with the given components
@@ -141,3 +171,4 @@ func parseFullDateTimeWithTimezone(str string, loc *time.Location) (time.Time, b
 	// No match
 	return time.Time{}, false
 }
+
