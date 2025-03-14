@@ -86,7 +86,7 @@ func main() {
     
     // Specify a timezone as an option
     loc, _ := time.LoadLocation("America/New_York")
-    t, err = strtotime.StrToTime("today", strtotime.TZ{Location: loc})
+    t, err = strtotime.StrToTime("today", strtotime.InTZ(loc))
     if err != nil {
         fmt.Printf("Error: %s\n", err)
         return
@@ -102,7 +102,7 @@ func main() {
     fmt.Printf("Date with timezone: %s\n", t.Format("2006-01-02 15:04:05 MST"))
     
     // Combine multiple options
-    t, err = strtotime.StrToTime("tomorrow", strtotime.Rel(baseTime), strtotime.TZ{Location: loc})
+    t, err = strtotime.StrToTime("tomorrow", strtotime.Rel(baseTime), strtotime.InTZ(loc))
     if err != nil {
         fmt.Printf("Error: %s\n", err)
         return
@@ -167,7 +167,7 @@ The library supports multiple timezone formats:
 - 3-letter abbreviations: `EST`, `PST`, `GMT`, `UTC`, etc.
 - IANA timezone names: `America/New_York`, `Europe/Paris`, `Asia/Tokyo`, etc.
 - Timezone can be specified in the string: `January 1 2023 EST`, `June 1 1985 16:30:00 Europe/Paris`
-- Timezone can also be provided as an option: `strtotime.TZ{Location: loc}`
+- Timezone can also be provided as an option: `strtotime.InTZ(loc)`
 
 ## Error Handling
 

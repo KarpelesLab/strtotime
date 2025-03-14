@@ -218,7 +218,7 @@ func TestStrToTime(t *testing.T) {
 			t.Logf("PHP %q => %s (timestamp: %d)", input, phpTimeReadable, phpTime)
 
 			// Get our implementation's interpretation with PHP's timezone
-			goTime, err := StrToTime(input, TZ{Location: loc})
+			goTime, err := StrToTime(input, InTZ(loc))
 			if err != nil {
 				t.Fatalf("StrToTime(%q) error: %v", input, err)
 			}

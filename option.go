@@ -13,11 +13,16 @@ func (r Rel) isOption() bool {
 	return true
 }
 
-// TZ represents a timezone to use for parsing
-type TZ struct {
-	Location *time.Location
+// InTZ sets a timezone to use for parsing
+func InTZ(loc *time.Location) Option {
+	return tzOption{loc: loc}
 }
 
-func (t TZ) isOption() bool {
+// tzOption is an internal type for timezone options
+type tzOption struct {
+	loc *time.Location
+}
+
+func (t tzOption) isOption() bool {
 	return true
 }

@@ -17,9 +17,9 @@ func StrToTime(str string, opts ...Option) (time.Time, error) {
 		switch v := opt.(type) {
 		case Rel: // relative to
 			now = time.Time(v)
-		case TZ: // timezone
-			if v.Location != nil {
-				loc = v.Location
+		case tzOption: // timezone
+			if v.loc != nil {
+				loc = v.loc
 			}
 		}
 	}
