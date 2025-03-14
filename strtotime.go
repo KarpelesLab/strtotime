@@ -82,19 +82,38 @@ func StrToTime(str string, opts ...Option) (time.Time, error) {
 		return time.Date(year, time.Month(month), day, 0, 0, 0, 0, loc), nil
 	}
 
+	// European format with dots: DD.MM.YY or DD.MM.YYYY
+	if matched, _ := regexp.MatchString(`^\d{1,2}\.\d{1,2}\.\d{2,4}$`, str); matched {
+		parts := strings.Split(str, ".")
+		day, _ := strconv.Atoi(parts[0])
+		month, _ := strconv.Atoi(parts[1])
+		year, _ := strconv.Atoi(parts[2])
+
+		// Handle 2-digit years (YY)
+		if year < 100 {
+			if year < 70 {
+				year += 2000 // 00-69 -> 2000-2069
+			} else {
+				year += 1900 // 70-99 -> 1970-1999
+			}
+		}
+
+		return time.Date(year, time.Month(month), day, 0, 0, 0, 0, loc), nil
+	}
+
 	// Normalize compound expressions like "next year+4 days" or "next year + 4 days"
 	// Replace spaces around + and - with nothing to make parsing easier
 	spaceOperatorRe := strings.NewReplacer(" + ", "+", " - ", "-", "+ ", "+", "- ", "-")
 	normalizedStr := spaceOperatorRe.Replace(str)
-	
+
 	// If we have + or - in the middle of the string (not at the start)
 	// then it's likely a compound expression
 	if (strings.Contains(normalizedStr, "+") && !strings.HasPrefix(normalizedStr, "+")) ||
-	   (strings.Contains(normalizedStr, "-") && !strings.HasPrefix(normalizedStr, "-")) {
+		(strings.Contains(normalizedStr, "-") && !strings.HasPrefix(normalizedStr, "-")) {
 		// Split the string at + and - operators
 		var parts []string
 		var operators []string
-		
+
 		// First find all + and - operators (not at the beginning)
 		currentPart := ""
 		for i := 0; i < len(normalizedStr); i++ {
@@ -106,18 +125,18 @@ func StrToTime(str string, opts ...Option) (time.Time, error) {
 				currentPart += string(normalizedStr[i])
 			}
 		}
-		
+
 		// Add the last part
 		if currentPart != "" {
 			parts = append(parts, currentPart)
 		}
-		
+
 		// Process the first part
 		result, err := StrToTime(parts[0], append(opts, Rel(now))...)
 		if err != nil {
 			return time.Time{}, err
 		}
-		
+
 		// Process each remaining part with its operator
 		for i := 0; i < len(operators); i++ {
 			// Apply the operator to the part
@@ -128,13 +147,38 @@ func StrToTime(str string, opts ...Option) (time.Time, error) {
 			}
 			result = nextResult
 		}
-		
+
 		return result, nil
 	}
-	
+
+	// Check if this is a date followed by a relative time adjustment
+	// Examples: "2023-05-30 -1 month" or "2022-01-01 +1 year"
+	dateTimeRe := regexp.MustCompile(`^(\d{4}-\d{1,2}-\d{1,2}|\d{4}/\d{1,2}/\d{1,2}|\d{1,2}/\d{1,2}/\d{4}|\d{1,2}\.\d{1,2}\.\d{2,4})\s+(.+)$`)
+	if dateTimeRe.MatchString(str) {
+		matches := dateTimeRe.FindStringSubmatch(str)
+		if len(matches) == 3 {
+			datePart := matches[1]
+			timePart := matches[2]
+
+			// Parse the date part
+			dateResult, err := StrToTime(datePart, append(opts, Rel(now))...)
+			if err != nil {
+				return time.Time{}, err
+			}
+
+			// Parse the time part using the date as reference
+			finalResult, err := StrToTime(timePart, append(opts, Rel(dateResult))...)
+			if err != nil {
+				return time.Time{}, err
+			}
+
+			return finalResult, nil
+		}
+	}
+
 	// Tokenize the input string
 	tokens := Tokenize(str)
-	
+
 	// Create a parser to process the tokens
 	parser := &Parser{
 		tokens:   tokens,
@@ -174,7 +218,7 @@ func (p *Parser) Parse() (time.Time, error) {
 	for p.position < len(p.tokens) {
 		// Skip whitespace between expressions
 		p.skipWhitespace()
-		
+
 		if p.position >= len(p.tokens) {
 			break
 		}
@@ -201,7 +245,7 @@ func (p *Parser) Parse() (time.Time, error) {
 				parsed = true
 			}
 		}
-		
+
 		// Try implicit positive relative time (e.g., "4 days" without explicit +)
 		if !parsed {
 			if t, ok, err := p.tryParseImplicitRelativeTime(); ok {
@@ -212,7 +256,7 @@ func (p *Parser) Parse() (time.Time, error) {
 				parsed = true
 			}
 		}
-		
+
 		// Try month only format (e.g., "January" or "Feb")
 		if !parsed {
 			if t, ok, err := p.tryParseMonthOnlyFormat(); ok {
@@ -285,7 +329,7 @@ func (p *Parser) tryParseStandardDate() (time.Time, bool, error) {
 		p.tokens[p.position+2].Typ == TypeNumber && // MM
 		p.tokens[p.position+3].Typ == TypeOperator && p.tokens[p.position+3].Val == "-" &&
 		p.tokens[p.position+4].Typ == TypeNumber { // DD
-		
+
 		year, _ := strconv.Atoi(p.tokens[p.position].Val)
 		p.position++
 		p.position++ // Skip the "-"
@@ -305,7 +349,7 @@ func (p *Parser) tryParseStandardDate() (time.Time, bool, error) {
 		p.tokens[p.position+2].Typ == TypeNumber && // MM
 		p.tokens[p.position+3].Typ == TypeOperator && p.tokens[p.position+3].Val == "/" &&
 		p.tokens[p.position+4].Typ == TypeNumber { // DD
-		
+
 		year, _ := strconv.Atoi(p.tokens[p.position].Val)
 		p.position++
 		p.position++ // Skip the "/"
@@ -325,7 +369,7 @@ func (p *Parser) tryParseStandardDate() (time.Time, bool, error) {
 		p.tokens[p.position+2].Typ == TypeNumber && // DD
 		p.tokens[p.position+3].Typ == TypeOperator && p.tokens[p.position+3].Val == "/" &&
 		p.tokens[p.position+4].Typ == TypeNumber { // YYYY
-		
+
 		month, _ := strconv.Atoi(p.tokens[p.position].Val)
 		p.position++
 		p.position++ // Skip the "/"
@@ -334,6 +378,35 @@ func (p *Parser) tryParseStandardDate() (time.Time, bool, error) {
 		p.position++ // Skip the "/"
 		year, _ := strconv.Atoi(p.tokens[p.position].Val)
 		p.position++
+
+		return time.Date(year, time.Month(month), day, 0, 0, 0, 0, p.loc), true, nil
+	}
+
+	// European format with dots: DD.MM.YY or DD.MM.YYYY
+	if p.position+4 < len(p.tokens) &&
+		p.tokens[p.position].Typ == TypeNumber && // DD
+		p.tokens[p.position+1].Typ == TypeOperator && p.tokens[p.position+1].Val == "." &&
+		p.tokens[p.position+2].Typ == TypeNumber && // MM
+		p.tokens[p.position+3].Typ == TypeOperator && p.tokens[p.position+3].Val == "." &&
+		p.tokens[p.position+4].Typ == TypeNumber { // YY or YYYY
+
+		day, _ := strconv.Atoi(p.tokens[p.position].Val)
+		p.position++
+		p.position++ // Skip the "."
+		month, _ := strconv.Atoi(p.tokens[p.position].Val)
+		p.position++
+		p.position++ // Skip the "."
+		year, _ := strconv.Atoi(p.tokens[p.position].Val)
+		p.position++
+
+		// Handle 2-digit years (YY)
+		if year < 100 {
+			if year < 70 {
+				year += 2000 // 00-69 -> 2000-2069
+			} else {
+				year += 1900 // 70-99 -> 1970-1999
+			}
+		}
 
 		return time.Date(year, time.Month(month), day, 0, 0, 0, 0, p.loc), true, nil
 	}
@@ -512,11 +585,7 @@ func (p *Parser) tryParseRelativeTime() (time.Time, bool, error) {
 	p.position++
 
 	// Process the unit
-	unit := unitToken.Val
-	// Handle plural forms by removing trailing 's'
-	if strings.HasSuffix(unit, "s") {
-		unit = unit[:len(unit)-1]
-	}
+	unit := normalizeTimeUnit(unitToken.Val)
 
 	switch unit {
 	case "day":
@@ -534,7 +603,7 @@ func (p *Parser) tryParseRelativeTime() (time.Time, bool, error) {
 	case "second":
 		return p.result.Add(time.Duration(amount) * time.Second), true, nil
 	default:
-		return time.Time{}, false, fmt.Errorf("unknown time unit: %s", unit)
+		return time.Time{}, false, fmt.Errorf("unknown time unit: %s", unitToken.Val)
 	}
 }
 
@@ -554,7 +623,7 @@ func (p *Parser) tryParseImplicitRelativeTime() (time.Time, bool, error) {
 	if err != nil {
 		return time.Time{}, false, fmt.Errorf("invalid number: %s", token.Val)
 	}
-	
+
 	// Always treat as positive (implicit +)
 	p.position++
 
@@ -574,11 +643,7 @@ func (p *Parser) tryParseImplicitRelativeTime() (time.Time, bool, error) {
 	p.position++
 
 	// Process the unit
-	unit := unitToken.Val
-	// Handle plural forms by removing trailing 's'
-	if strings.HasSuffix(unit, "s") {
-		unit = unit[:len(unit)-1]
-	}
+	unit := normalizeTimeUnit(unitToken.Val)
 
 	switch unit {
 	case "day":
@@ -596,7 +661,7 @@ func (p *Parser) tryParseImplicitRelativeTime() (time.Time, bool, error) {
 	case "second":
 		return p.result.Add(time.Duration(amount) * time.Second), true, nil
 	default:
-		return time.Time{}, false, fmt.Errorf("unknown time unit: %s", unit)
+		return time.Time{}, false, fmt.Errorf("unknown time unit: %s", unitToken.Val)
 	}
 }
 
@@ -615,8 +680,8 @@ func (p *Parser) tryParseMonthOnlyFormat() (time.Time, bool, error) {
 			return time.Time{}, false, nil
 		}
 		// Or if it's whitespace followed by a number, it might be "Month Day" with space
-		if nextToken.Typ == TypeWhitespace && p.position+2 < len(p.tokens) && 
-		   p.tokens[p.position+2].Typ == TypeNumber {
+		if nextToken.Typ == TypeWhitespace && p.position+2 < len(p.tokens) &&
+			p.tokens[p.position+2].Typ == TypeNumber {
 			return time.Time{}, false, nil
 		}
 	}
@@ -631,14 +696,14 @@ func (p *Parser) tryParseMonthOnlyFormat() (time.Time, bool, error) {
 	if !ok {
 		return time.Time{}, false, nil
 	}
-	
+
 	// Consume the month token
 	p.position++
-	
+
 	// Use the current year and day 1 of the given month
 	year := p.result.Year()
 	day := 1
-	
+
 	return time.Date(year, month, day, 0, 0, 0, 0, p.loc), true, nil
 }
 
@@ -676,7 +741,7 @@ func (p *Parser) tryParseMonthNameFormat() (time.Time, bool, error) {
 		return time.Time{}, false, fmt.Errorf("invalid day number: %s", dayToken.Val)
 	}
 	p.position++
-	
+
 	// Check for ordinal suffix (like "th", "st", "nd", "rd")
 	if p.position < len(p.tokens) && p.tokens[p.position].Typ == TypeString {
 		suffix := strings.ToLower(p.tokens[p.position].Val)
@@ -694,7 +759,7 @@ func (p *Parser) tryParseMonthNameFormat() (time.Time, bool, error) {
 
 	// Check for year (optional - if not present, use current year)
 	year := p.result.Year() // Default to current year
-	
+
 	if p.position < len(p.tokens) {
 		yearToken := p.tokens[p.position]
 		if yearToken.Typ == TypeNumber {
@@ -770,4 +835,50 @@ func getDayOfWeek(day string) int {
 	default:
 		return -1
 	}
+}
+
+// normalizeTimeUnit converts various time unit notations to a canonical form
+func normalizeTimeUnit(unit string) string {
+	// Handle plural forms first
+	if strings.HasSuffix(unit, "s") {
+		unit = unit[:len(unit)-1]
+	}
+
+	// Check for common abbreviations and misspellings
+	switch unit {
+	case "d":
+		return "day"
+	case "w", "wk":
+		return "week"
+	case "m", "mon":
+		return "month"
+	case "y", "yr":
+		return "year"
+	case "h", "hr":
+		return "hour"
+	case "min":
+		return "minute"
+	case "sec":
+		return "second"
+	}
+
+	// Handle prefixes to catch misspellings or variations
+	if strings.HasPrefix(unit, "day") {
+		return "day"
+	} else if strings.HasPrefix(unit, "week") {
+		return "week"
+	} else if strings.HasPrefix(unit, "month") {
+		return "month"
+	} else if strings.HasPrefix(unit, "year") {
+		return "year"
+	} else if strings.HasPrefix(unit, "hour") || strings.HasPrefix(unit, "hr") {
+		return "hour"
+	} else if strings.HasPrefix(unit, "minute") || strings.HasPrefix(unit, "min") {
+		return "minute"
+	} else if strings.HasPrefix(unit, "second") || strings.HasPrefix(unit, "sec") {
+		return "second"
+	}
+
+	// If we couldn't normalize, return the original unit
+	return unit
 }
