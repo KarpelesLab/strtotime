@@ -15,17 +15,17 @@ func parseISOFormat(str string, loc *time.Location) (time.Time, bool) {
 		if err != nil {
 			return time.Time{}, false
 		}
-		
+
 		month, err := strconv.Atoi(parts[1])
 		if err != nil {
 			return time.Time{}, false
 		}
-		
+
 		day, err := strconv.Atoi(parts[2])
 		if err != nil {
 			return time.Time{}, false
 		}
-		
+
 		return time.Date(year, time.Month(month), day, 0, 0, 0, 0, loc), true
 	}
 	return time.Time{}, false
@@ -39,17 +39,17 @@ func parseSlashFormat(str string, loc *time.Location) (time.Time, bool) {
 		if err != nil {
 			return time.Time{}, false
 		}
-		
+
 		month, err := strconv.Atoi(parts[1])
 		if err != nil {
 			return time.Time{}, false
 		}
-		
+
 		day, err := strconv.Atoi(parts[2])
 		if err != nil {
 			return time.Time{}, false
 		}
-		
+
 		return time.Date(year, time.Month(month), day, 0, 0, 0, 0, loc), true
 	}
 	return time.Time{}, false
@@ -63,17 +63,17 @@ func parseUSFormat(str string, loc *time.Location) (time.Time, bool) {
 		if err != nil {
 			return time.Time{}, false
 		}
-		
+
 		day, err := strconv.Atoi(parts[1])
 		if err != nil {
 			return time.Time{}, false
 		}
-		
+
 		year, err := strconv.Atoi(parts[2])
 		if err != nil {
 			return time.Time{}, false
 		}
-		
+
 		return time.Date(year, time.Month(month), day, 0, 0, 0, 0, loc), true
 	}
 	return time.Time{}, false
@@ -87,12 +87,12 @@ func parseEuropeanFormat(str string, loc *time.Location) (time.Time, bool) {
 		if err != nil {
 			return time.Time{}, false
 		}
-		
+
 		month, err := strconv.Atoi(parts[1])
 		if err != nil {
 			return time.Time{}, false
 		}
-		
+
 		year, err := strconv.Atoi(parts[2])
 		if err != nil {
 			return time.Time{}, false
@@ -107,17 +107,17 @@ func parseEuropeanFormat(str string, loc *time.Location) (time.Time, bool) {
 				year += 1900 // 70-99 -> 1970-1999
 			}
 		}
-		
+
 		// Validate the date components
 		if month < 1 || month > 12 {
 			return time.Time{}, false
 		}
-		
+
 		// Simple validation for days - better validation would check days per month
 		if day < 1 || day > 31 {
 			return time.Time{}, false
 		}
-		
+
 		return time.Date(year, time.Month(month), day, 0, 0, 0, 0, loc), true
 	}
 	return time.Time{}, false
@@ -128,7 +128,7 @@ func parseTwoDigitYear(year int) int {
 	if year < 100 {
 		if year < 70 {
 			return year + 2000 // 00-69 -> 2000-2069
-		} 
+		}
 		return year + 1900 // 70-99 -> 1970-1999
 	}
 	return year

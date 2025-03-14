@@ -35,7 +35,7 @@ func StrToTime(str string, opts ...Option) (time.Time, error) {
 	if str == "" {
 		return time.Time{}, ErrEmptyTimeString
 	}
-	
+
 	// Special case for European date format like "24.11.22"
 	if matched, _ := regexp.MatchString(`^\d{1,2}\.\d{1,2}\.\d{2,4}$`, str); matched {
 		parts := strings.Split(str, ".")
@@ -53,7 +53,7 @@ func StrToTime(str string, opts ...Option) (time.Time, error) {
 							year += 1900 // 70-99 -> 1970-1999
 						}
 					}
-					
+
 					// Validate date components
 					if month >= 1 && month <= 12 && day >= 1 && day <= 31 {
 						return time.Date(year, time.Month(month), day, 0, 0, 0, 0, loc), nil
@@ -79,21 +79,21 @@ func StrToTime(str string, opts ...Option) (time.Time, error) {
 		year, month, day := yesterday.Date()
 		return time.Date(year, month, day, 0, 0, 0, 0, loc), nil
 	}
-	
+
 	// Try date with timezone format
 	if t, ok := parseWithTimezone(str, loc); ok {
 		return t, nil
 	}
-	
+
 	// Try standard date formats
 	if t, ok := parseISOFormat(str, loc); ok {
 		return t, nil
 	}
-	
+
 	if t, ok := parseSlashFormat(str, loc); ok {
 		return t, nil
 	}
-	
+
 	if t, ok := parseUSFormat(str, loc); ok {
 		return t, nil
 	}
@@ -166,7 +166,7 @@ func StrToTime(str string, opts ...Option) (time.Time, error) {
 			// Handle special case for month end dates when subtracting months
 			if timePart == "-1 month" {
 				year, month, day := dateResult.Date()
-				
+
 				// Check if it's the last day of the month
 				if day == daysInMonth(year, month) {
 					// Create a date for the first day of the current month
@@ -175,15 +175,15 @@ func StrToTime(str string, opts ...Option) (time.Time, error) {
 					prevMonth := firstOfMonth.AddDate(0, -1, 0)
 					// Get the last day of the previous month
 					lastDay := daysInMonth(prevMonth.Year(), prevMonth.Month())
-					
+
 					// Create the final date with the last day of the previous month,
 					// preserving hour, minute, second from the original date
-					return time.Date(prevMonth.Year(), prevMonth.Month(), lastDay, 
-						dateResult.Hour(), dateResult.Minute(), dateResult.Second(), 
+					return time.Date(prevMonth.Year(), prevMonth.Month(), lastDay,
+						dateResult.Hour(), dateResult.Minute(), dateResult.Second(),
 						dateResult.Nanosecond(), loc), nil
 				}
 			}
-			
+
 			// Parse the time part using the date as reference
 			finalResult, err := StrToTime(timePart, append(opts, Rel(dateResult))...)
 			if err != nil {
@@ -357,7 +357,7 @@ func (p *Parser) tryParseTimezone() bool {
 
 	// Save the current position in case we need to backtrack
 	startPos := p.position
-	
+
 	// Try parsing a single token timezone (like "EST", "GMT", etc.)
 	if p.position < len(p.tokens) && p.tokens[p.position].Typ == TypeString {
 		tzString := p.tokens[p.position].Val
@@ -365,60 +365,59 @@ func (p *Parser) tryParseTimezone() bool {
 			p.loc = loc
 			p.tzFound = true
 			p.position++
-			
+
 			// Update result to be in the new timezone
 			p.result = p.result.In(p.loc)
 			return true
 		}
 	}
-	
+
 	// Try parsing a full timezone name with slashes (like "America/New_York")
 	// This could be multiple tokens like "Europe" "/" "Paris"
-	if p.position+2 < len(p.tokens) && 
-	   p.tokens[p.position].Typ == TypeString && 
-	   p.tokens[p.position+1].Typ == TypeOperator && 
-	   p.tokens[p.position+1].Val == "/" && 
-	   p.tokens[p.position+2].Typ == TypeString {
-		
+	if p.position+2 < len(p.tokens) &&
+		p.tokens[p.position].Typ == TypeString &&
+		p.tokens[p.position+1].Typ == TypeOperator &&
+		p.tokens[p.position+1].Val == "/" &&
+		p.tokens[p.position+2].Typ == TypeString {
+
 		// Construct the timezone string with slash
 		tzString := p.tokens[p.position].Val + "/" + p.tokens[p.position+2].Val
-		
+
 		if loc, found := tryParseTimezone(tzString); found {
 			p.loc = loc
 			p.tzFound = true
 			p.position += 3 // Skip all three tokens
-			
+
 			// Update result to be in the new timezone
 			p.result = p.result.In(p.loc)
 			return true
 		}
 	}
-	
+
 	// Try parsing multi-word timezone names (like "Eastern Time")
-	if p.position+2 < len(p.tokens) && 
-	   p.tokens[p.position].Typ == TypeString && 
-	   p.tokens[p.position+1].Typ == TypeWhitespace && 
-	   p.tokens[p.position+2].Typ == TypeString {
-		
+	if p.position+2 < len(p.tokens) &&
+		p.tokens[p.position].Typ == TypeString &&
+		p.tokens[p.position+1].Typ == TypeWhitespace &&
+		p.tokens[p.position+2].Typ == TypeString {
+
 		// Try to combine the tokens to form a full name
 		tzString := p.tokens[p.position].Val + " " + p.tokens[p.position+2].Val
-		
+
 		if loc, found := tryParseTimezone(tzString); found {
 			p.loc = loc
 			p.tzFound = true
 			p.position += 3 // Skip all three tokens
-			
+
 			// Update result to be in the new timezone
 			p.result = p.result.In(p.loc)
 			return true
 		}
 	}
-	
+
 	// Restore the position if we couldn't parse a timezone
 	p.position = startPos
 	return false
 }
-
 
 // tryParseStandardDate attempts to parse standard date formats like ISO dates
 func (p *Parser) tryParseStandardDate() (time.Time, bool, error) {
@@ -436,14 +435,14 @@ func (p *Parser) tryParseStandardDate() (time.Time, bool, error) {
 		}
 		p.position++
 		p.position++ // Skip the "-"
-		
+
 		month, err := strconv.Atoi(p.tokens[p.position].Val)
 		if err != nil {
 			return time.Time{}, false, fmt.Errorf("invalid month: %w", err)
 		}
 		p.position++
 		p.position++ // Skip the "-"
-		
+
 		day, err := strconv.Atoi(p.tokens[p.position].Val)
 		if err != nil {
 			return time.Time{}, false, fmt.Errorf("invalid day: %w", err)
@@ -467,14 +466,14 @@ func (p *Parser) tryParseStandardDate() (time.Time, bool, error) {
 		}
 		p.position++
 		p.position++ // Skip the "/"
-		
+
 		month, err := strconv.Atoi(p.tokens[p.position].Val)
 		if err != nil {
 			return time.Time{}, false, fmt.Errorf("invalid month: %w", err)
 		}
 		p.position++
 		p.position++ // Skip the "/"
-		
+
 		day, err := strconv.Atoi(p.tokens[p.position].Val)
 		if err != nil {
 			return time.Time{}, false, fmt.Errorf("invalid day: %w", err)
@@ -498,14 +497,14 @@ func (p *Parser) tryParseStandardDate() (time.Time, bool, error) {
 		}
 		p.position++
 		p.position++ // Skip the "/"
-		
+
 		day, err := strconv.Atoi(p.tokens[p.position].Val)
 		if err != nil {
 			return time.Time{}, false, fmt.Errorf("invalid day: %w", err)
 		}
 		p.position++
 		p.position++ // Skip the "/"
-		
+
 		year, err := strconv.Atoi(p.tokens[p.position].Val)
 		if err != nil {
 			return time.Time{}, false, fmt.Errorf("invalid year: %w", err)
@@ -529,14 +528,14 @@ func (p *Parser) tryParseStandardDate() (time.Time, bool, error) {
 		}
 		p.position++
 		p.position++ // Skip the "."
-		
+
 		month, err := strconv.Atoi(p.tokens[p.position].Val)
 		if err != nil {
 			return time.Time{}, false, fmt.Errorf("invalid month: %w", err)
 		}
 		p.position++
 		p.position++ // Skip the "."
-		
+
 		year, err := strconv.Atoi(p.tokens[p.position].Val)
 		if err != nil {
 			return time.Time{}, false, fmt.Errorf("invalid year: %w", err)
@@ -698,20 +697,20 @@ func (p *Parser) applyTimeUnitOffset(amount int, unitStr string) (time.Time, err
 	case UnitMonth:
 		// Special handling for end-of-month dates
 		year, month, day := p.result.Date()
-			
+
 		// If day is the last day of the month, and we're adjusting months,
 		// make sure to set it to the last day of the target month
 		if day == daysInMonth(year, month) {
 			// Add the months first
 			newDate := p.result.AddDate(0, amount, 0)
 			newYear, newMonth, _ := newDate.Date()
-				
+
 			// Then set the day to the last day of the month
 			lastDay := daysInMonth(newYear, newMonth)
-			return time.Date(newYear, newMonth, lastDay, p.result.Hour(), 
+			return time.Date(newYear, newMonth, lastDay, p.result.Hour(),
 				p.result.Minute(), p.result.Second(), p.result.Nanosecond(), p.loc), nil
 		}
-			
+
 		return p.result.AddDate(0, amount, 0), nil
 	case UnitYear:
 		return p.result.AddDate(amount, 0, 0), nil
@@ -781,7 +780,7 @@ func (p *Parser) tryParseRelativeTime() (time.Time, bool, error) {
 	if err != nil {
 		return time.Time{}, false, err
 	}
-	
+
 	return result, true, nil
 }
 
@@ -825,7 +824,7 @@ func (p *Parser) tryParseImplicitRelativeTime() (time.Time, bool, error) {
 	if err != nil {
 		return time.Time{}, false, err
 	}
-	
+
 	return result, true, nil
 }
 
@@ -942,28 +941,28 @@ func (p *Parser) tryParseMonthNameFormat() (time.Time, bool, error) {
 	// Check for time (optional)
 	// Format: HH:MM:SS
 	p.skipWhitespace()
-	if p.position+4 < len(p.tokens) && 
-	   p.tokens[p.position].Typ == TypeNumber && // HH
-	   p.tokens[p.position+1].Typ == TypeOperator && p.tokens[p.position+1].Val == ":" &&
-	   p.tokens[p.position+2].Typ == TypeNumber { // MM
-		
+	if p.position+4 < len(p.tokens) &&
+		p.tokens[p.position].Typ == TypeNumber && // HH
+		p.tokens[p.position+1].Typ == TypeOperator && p.tokens[p.position+1].Val == ":" &&
+		p.tokens[p.position+2].Typ == TypeNumber { // MM
+
 		// Parse hour
 		hourVal, err := strconv.Atoi(p.tokens[p.position].Val)
 		if err == nil && hourVal >= 0 && hourVal <= 23 {
 			hour = hourVal
 			p.position += 2 // Skip HH:
-			
+
 			// Parse minute
 			minuteVal, err := strconv.Atoi(p.tokens[p.position].Val)
 			if err == nil && minuteVal >= 0 && minuteVal <= 59 {
 				minute = minuteVal
 				p.position++
-				
+
 				// Check for seconds (optional)
-				if p.position+2 < len(p.tokens) && 
-				   p.tokens[p.position].Typ == TypeOperator && p.tokens[p.position].Val == ":" &&
-				   p.tokens[p.position+1].Typ == TypeNumber {
-					
+				if p.position+2 < len(p.tokens) &&
+					p.tokens[p.position].Typ == TypeOperator && p.tokens[p.position].Val == ":" &&
+					p.tokens[p.position+1].Typ == TypeNumber {
+
 					p.position++ // Skip :
 					secondVal, err := strconv.Atoi(p.tokens[p.position].Val)
 					if err == nil && secondVal >= 0 && secondVal <= 59 {
@@ -1069,7 +1068,7 @@ func normalizeTimeUnit(unit string) string {
 	case "seconds", "secs", "secs.":
 		return UnitSecond
 	}
-	
+
 	// Handle excessive plural forms (e.g., "hourss" -> "hours" -> "hour")
 	for strings.HasSuffix(unit, "s") {
 		unit = unit[:len(unit)-1]
@@ -1109,7 +1108,7 @@ func normalizeTimeUnit(unit string) string {
 	} else if strings.HasPrefix(unit, "second") || strings.HasPrefix(unit, "sec") {
 		return UnitSecond
 	}
-	
+
 	// Try more aggressive matching for hours
 	if strings.Contains(unit, "hr") || strings.Contains(unit, "hour") {
 		return UnitHour

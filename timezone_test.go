@@ -65,7 +65,7 @@ func TestTimezoneWithTime(t *testing.T) {
 			"2023-01-01 08:15:00 -0800 PST",
 		},
 		{
-			"June 1 1985 16:30:00 Europe/Paris", 
+			"June 1 1985 16:30:00 Europe/Paris",
 			"1985-06-01 16:30:00 +0200 CEST",
 		},
 	}
