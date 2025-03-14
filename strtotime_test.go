@@ -10,27 +10,112 @@ import (
 )
 
 func TestStrToTime(t *testing.T) {
-	tests := []struct {
-		input string
-		want  string // Human readable expected result for debugging
-	}{
-		{"now", "now"},
-		{"today", "today"},
-		{"tomorrow", "tomorrow"},
-		{"yesterday", "yesterday"},
-		{"next week", "next week"},
-		{"last week", "last week"},
-		{"+1 day", "+1 day"},
-		{"+1 week", "+1 week"},
-		{"+1 month", "+1 month"},
-		{"+1 year", "+1 year"},
-		{"next Thursday", "next Thursday"},
-		{"last Monday", "last Monday"},
-		{"2023-01-15", "2023-01-15"},
-		{"2023/01/15", "2023/01/15"},
-		{"01/15/2023", "01/15/2023"},
-		{"January 15 2023", "January 15 2023"},
-		{"Jan 15, 2023", "Jan 15, 2023"},
+	tests := []string{
+		// Basic time concepts
+		"now",
+		"today",
+		"tomorrow",
+		"yesterday",
+		"next week",
+		"last week",
+
+		// Relative time adjustments - positive
+		"+1 day",
+		"+2 days",
+		"+1 week",
+		"+3 weeks",
+		"+1 month",
+		"+6 months",
+		"+1 year",
+		"+10 years",
+
+		// Relative time adjustments - negative
+		"-1 day",
+		"-2 days",
+		"-1 week",
+		"-3 weeks",
+		"-1 month",
+		"-6 months",
+		"-1 year",
+		"-10 years",
+
+		// Day of week navigation
+		"next Sunday",
+		"next Monday",
+		"next Tuesday",
+		"next Wednesday",
+		"next Thursday",
+		"next Friday",
+		"next Saturday",
+		"last Sunday",
+		"last Monday",
+		"last Tuesday",
+		"last Wednesday",
+		"last Thursday",
+		"last Friday",
+		"last Saturday",
+
+		// Abbreviated day names
+		"next Sun",
+		"next Mon",
+		"next Tue",
+		"next Wed",
+		"next Thu",
+		"next Fri",
+		"next Sat",
+		"last Sun",
+		"last Mon",
+
+		// Date formats
+		"2023-01-15",
+		"2023-12-31",
+		"2023/01/15",
+		"2023/12/31",
+		"01/15/2023",
+		"12/31/2023",
+
+		// Full month names
+		"January 15 2023",
+		"February 28 2023",
+		"March 31 2023",
+		"April 30 2023",
+		"May 31 2023",
+		"June 30 2023",
+		"July 31 2023",
+		"August 31 2023",
+		"September 30 2023",
+		"October 31 2023",
+		"November 30 2023",
+		"December 31 2023",
+
+		// Short month names
+		"Jan 15, 2023",
+		"Feb 28, 2023",
+		"Mar 31, 2023",
+		"Apr 30, 2023",
+		"May 31, 2023",
+		"Jun 30, 2023",
+		"Jul 31, 2023",
+		"Aug 31, 2023",
+		"Sep 30, 2023",
+		"Oct 31, 2023",
+		"Nov 30, 2023",
+		"Dec 31, 2023",
+
+		// Month names with no comma
+		"Jan 15 2023",
+		"Feb 28 2023",
+
+		// Case insensitivity tests
+		"TOMORROW",
+		"Next Monday",
+		"NEXT FRIDAY",
+		"Last SATURDAY",
+
+		// Whitespace handling
+		" tomorrow ",
+		"   next   monday   ",
+		"+1     day",
 	}
 
 	// First get PHP's timezone
@@ -38,7 +123,7 @@ func TestStrToTime(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to get PHP timezone: %v", err)
 	}
-	
+
 	// Create timezone option
 	loc, err := time.LoadLocation(phpTz)
 	if err != nil {
@@ -47,14 +132,14 @@ func TestStrToTime(t *testing.T) {
 
 	t.Logf("Running tests with timezone: %s", phpTz)
 
-	for _, tt := range tests {
-		t.Run(tt.input, func(t *testing.T) {
+	for _, input := range tests {
+		t.Run(input, func(t *testing.T) {
 			// Get PHP's interpretation of the time string
 			phpCode := fmt.Sprintf(`
 				$ts = strtotime(%q);
 				echo $ts . "\n";
 				echo date('Y-m-d H:i:s', $ts);
-			`, tt.input)
+			`, input)
 
 			cmd := exec.Command("php", "-r", phpCode)
 			output, err := cmd.Output()
@@ -73,18 +158,18 @@ func TestStrToTime(t *testing.T) {
 			}
 
 			phpTimeReadable := lines[1]
-			t.Logf("PHP %q => %s (timestamp: %d)", tt.input, phpTimeReadable, phpTime)
-			
+			t.Logf("PHP %q => %s (timestamp: %d)", input, phpTimeReadable, phpTime)
+
 			// Get our implementation's interpretation with PHP's timezone
-			goTime, err := StrToTime(tt.input, TZ{Location: loc})
+			goTime, err := StrToTime(input, TZ{Location: loc})
 			if err != nil {
-				t.Fatalf("StrToTime(%q) error: %v", tt.input, err)
+				t.Fatalf("StrToTime(%q) error: %v", input, err)
 			}
 
 			// Compare timestamps within a small tolerance (1 second)
 			if abs(goTime.Unix()-phpTime) > 1 {
 				t.Errorf("StrToTime(%q) = %v (%s), PHP returned %v (%s) (diff: %v seconds)",
-					tt.input, goTime.Unix(), goTime.Format("2006-01-02 15:04:05"), 
+					input, goTime.Unix(), goTime.Format("2006-01-02 15:04:05"),
 					phpTime, phpTimeReadable, abs(goTime.Unix()-phpTime))
 			}
 		})
@@ -98,7 +183,7 @@ func getPHPTimezone() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	
+
 	// Return the timezone name
 	return strings.TrimSpace(string(output)), nil
 }

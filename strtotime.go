@@ -31,6 +31,9 @@ func StrToTime(str string, opts ...Option) (time.Time, error) {
 		now = now.In(loc)
 	}
 
+	// Store original string for error reporting
+	origStr := str
+
 	// Basic implementation of some simple time formats
 	str = strings.ToLower(strings.TrimSpace(str))
 
@@ -53,13 +56,13 @@ func StrToTime(str string, opts ...Option) (time.Time, error) {
 		// PHP treats "next week" as "next Monday" (not the next occurrence of Monday, but Monday of next week)
 		// If today is Friday, "next week" gives next Monday (3 days away)
 		// But we need to adjust this calculation
-		
+
 		// Today is 2025-03-14 (Friday), and "next week" is Monday, March 17, 2025
 		// So for Friday, the difference is 3 days (not 4)
-		
+
 		dayOfWeek := int(now.Weekday())
 		var daysToAdd int
-		
+
 		switch dayOfWeek {
 		case 0: // Sunday
 			daysToAdd = 1 // Next Monday is 1 day away
@@ -76,18 +79,18 @@ func StrToTime(str string, opts ...Option) (time.Time, error) {
 		case 6: // Saturday
 			daysToAdd = 2 // Next Monday is 2 days away
 		}
-		
+
 		// Important: PHP keeps the time for "next week"
 		nextMondayTime := now.AddDate(0, 0, daysToAdd)
 		return nextMondayTime, nil
-		
+
 	case "last week":
 		// PHP treats "last week" as the previous Monday
 		// For Friday March 14, 2025, that's Monday March 3, 2025 (11 days earlier)
-		
+
 		dayOfWeek := int(now.Weekday())
 		var daysToSubtract int
-		
+
 		switch dayOfWeek {
 		case 0: // Sunday
 			daysToSubtract = 6 // Last Monday was 6 days ago
@@ -104,21 +107,62 @@ func StrToTime(str string, opts ...Option) (time.Time, error) {
 		case 6: // Saturday
 			daysToSubtract = 12 // Last Monday was 12 days ago
 		}
-		
+
 		lastMondayTime := now.AddDate(0, 0, -daysToSubtract)
 		return lastMondayTime, nil
 	}
 
 	// Handle +/- relative time formats
-	if strings.HasPrefix(str, "+") {
-		parts := strings.Split(str[1:], " ")
-		if len(parts) == 2 {
-			amount, err := strconv.Atoi(parts[0])
+	if strings.HasPrefix(str, "+") || strings.HasPrefix(str, "-") {
+		sign := 1
+		if strings.HasPrefix(str, "-") {
+			sign = -1
+		}
+
+		// Use regexp to handle variable whitespace
+		reRelTime := regexp.MustCompile(`^[+-](\d+)\s+(\w+)$`)
+		if matches := reRelTime.FindStringSubmatch(str); len(matches) == 3 {
+			amount, err := strconv.Atoi(matches[1])
 			if err != nil {
 				return time.Time{}, err
 			}
 
-			unit := parts[1]
+			// Apply the sign
+			amount = amount * sign
+
+			unit := matches[2]
+			switch unit {
+			case "day", "days":
+				return now.AddDate(0, 0, amount), nil
+			case "week", "weeks":
+				return now.AddDate(0, 0, amount*7), nil
+			case "month", "months":
+				return now.AddDate(0, amount, 0), nil
+			case "year", "years":
+				return now.AddDate(amount, 0, 0), nil
+			}
+		}
+
+		// If the standard pattern didn't match, try a more permissive one with multiple whitespaces
+		reRelTimeMultiSpace := regexp.MustCompile(`^[+-](\d+)\s+(\w+)$`)
+		origStrTrimmed := strings.TrimSpace(origStr)
+		origStrLower := strings.ToLower(origStrTrimmed)
+
+		// Normalize multiple spaces to single space
+		normalized := regexp.MustCompile(`\s+`).ReplaceAllString(origStrLower, " ")
+
+		if matches := reRelTimeMultiSpace.FindStringSubmatch(normalized); len(matches) == 3 {
+			amount, err := strconv.Atoi(matches[1])
+			if err != nil {
+				return time.Time{}, err
+			}
+
+			// Apply the sign
+			if strings.HasPrefix(normalized, "-") {
+				amount = -amount
+			}
+
+			unit := matches[2]
 			switch unit {
 			case "day", "days":
 				return now.AddDate(0, 0, amount), nil
@@ -241,8 +285,15 @@ func StrToTime(str string, opts ...Option) (time.Time, error) {
 		return time.Date(year, month, day, 0, 0, 0, 0, loc), nil
 	}
 
+	// Try handling a normalized version of the string
+	normalized := regexp.MustCompile(`\s+`).ReplaceAllString(str, " ")
+	if normalized != str {
+		// Try all patterns again with normalized string
+		return StrToTime(normalized, opts...)
+	}
+
 	// We need more complex parsing for other formats
-	return time.Time{}, errors.New("unknown or unsupported time format: " + str)
+	return time.Time{}, errors.New("unknown or unsupported time format: " + origStr)
 }
 
 // getDayOfWeek converts day name to day number (0 = Sunday, 6 = Saturday)
