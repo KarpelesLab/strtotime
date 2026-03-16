@@ -304,23 +304,6 @@ func (p *Parser) skipWhitespace() {
 	}
 }
 
-// peek returns the next token without advancing the position
-func (p *Parser) peek() *Token {
-	if p.position >= len(p.tokens) {
-		return nil
-	}
-	return &p.tokens[p.position]
-}
-
-// consume advances the position and returns the current token
-func (p *Parser) consume() *Token {
-	if p.position >= len(p.tokens) {
-		return nil
-	}
-	token := &p.tokens[p.position]
-	p.position++
-	return token
-}
 
 // tryParseTimezone attempts to parse a timezone from the token stream
 // This handles both abbreviations (PST, EST) and full names (America/New_York, Europe/Paris)
@@ -1028,13 +1011,7 @@ func (p *Parser) tryParseMonthNameFormat() (time.Time, bool, error) {
 	return time.Date(year, month, day, hour, minute, second, 0, p.loc), true, nil
 }
 
-// tryMatch checks if the tokens at the current position match a pattern
-func (p *Parser) tryMatch(matcher func([]Token, int) bool) bool {
-	if p.position >= len(p.tokens) {
-		return false
-	}
-	return matcher(p.tokens, p.position)
-}
+
 
 // getMonthByName converts a month name to its number
 func getMonthByName(name string) (time.Month, bool) {

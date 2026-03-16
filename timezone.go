@@ -3,6 +3,7 @@ package strtotime
 import (
 	"strings"
 	"time"
+	"unicode"
 )
 
 // Common timezone abbreviations
@@ -153,8 +154,8 @@ func tryParseTimezone(tzString string) (*time.Location, bool) {
 		}
 		
 		// Convert to proper case: first letter uppercase, rest lowercase
-		region := strings.Title(strings.ToLower(parts[0]))
-		city := strings.Title(strings.ToLower(parts[1]))
+		region := titleCase(strings.ToLower(parts[0]))
+		city := titleCase(strings.ToLower(parts[1]))
 		tzPropCase := region + "/" + city
 
 		if loc, err := time.LoadLocation(tzPropCase); err == nil {
@@ -175,8 +176,8 @@ func tryParseTimezone(tzString string) (*time.Location, bool) {
 			}
 			
 			// Title case each part and replace spaces with underscore
-			region := strings.Title(strings.ToLower(parts[0]))
-			city := strings.Title(strings.ToLower(parts[1]))
+			region := titleCase(strings.ToLower(parts[0]))
+			city := titleCase(strings.ToLower(parts[1]))
 			// Replace spaces back with underscores for IANA format
 			city = strings.ReplaceAll(city, " ", "_")
 			tzPropCase := region + "/" + city
@@ -192,8 +193,21 @@ func tryParseTimezone(tzString string) (*time.Location, bool) {
 
 // isValidTimezoneChar checks if a character is valid in a timezone string
 func isValidTimezoneChar(c rune) bool {
-	return (c >= 'a' && c <= 'z') || 
-	       (c >= 'A' && c <= 'Z') || 
-	       (c >= '0' && c <= '9') || 
+	return (c >= 'a' && c <= 'z') ||
+	       (c >= 'A' && c <= 'Z') ||
+	       (c >= '0' && c <= '9') ||
 	       c == '/' || c == '_' || c == '-' || c == '+' || c == ' '
+}
+
+// titleCase converts the first letter of each word to uppercase
+func titleCase(s string) string {
+	prev := ' '
+	return strings.Map(func(r rune) rune {
+		if unicode.IsSpace(prev) || prev == '_' || prev == '/' {
+			prev = r
+			return unicode.ToUpper(r)
+		}
+		prev = r
+		return r
+	}, s)
 }

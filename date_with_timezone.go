@@ -167,7 +167,12 @@ func parseFullDateTimeWithTimezone(str string, loc *time.Location) (time.Time, b
 	// Parse day (may have ordinal suffix like "1st", "2nd", "3rd", "4th")
 	dayStr := fields[idx]
 	// Strip ordinal suffixes
-	dayStr = strings.TrimRight(dayStr, "stndrdth")
+	for _, suffix := range []string{"st", "nd", "rd", "th"} {
+		if strings.HasSuffix(dayStr, suffix) {
+			dayStr = dayStr[:len(dayStr)-len(suffix)]
+			break
+		}
+	}
 	day, err := strconv.Atoi(dayStr)
 	if err != nil || day < 1 || day > 31 {
 		return time.Time{}, false
