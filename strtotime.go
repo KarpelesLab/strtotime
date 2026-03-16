@@ -116,6 +116,11 @@ nextFormat:
 		return time.Date(year, month, day, 0, 0, 0, 0, loc), nil
 	}
 
+	// Try ISO 8601 formats (T separator, week dates, timezone offsets)
+	if t, ok := parseISO8601(str, loc); ok {
+		return t, nil
+	}
+
 	// Try to parse datetime format (YYYY-MM-DD HH:MM:SS)
 	if t, ok := parseDateTimeFormat(str, loc); ok {
 		return t, nil

@@ -37,11 +37,10 @@ func TestPHPStrtotime3_64bit(t *testing.T) {
 			time.Date(2004, 3, 2, 0, 0, 0, 0, time.UTC),
 		},
 		// "20060212T23:12:23UTC" - ISO 8601 with T separator
-		// TODO: enable when ISO 8601 T-separator format is supported
-		// {
-		// 	"20060212T23:12:23UTC",
-		// 	time.Date(2006, 2, 12, 23, 12, 23, 0, time.UTC),
-		// },
+		{
+			"20060212T23:12:23UTC",
+			time.Date(2006, 2, 12, 23, 12, 23, 0, time.UTC),
+		},
 		// "Jan-15-2006" → Sun, 15 Jan 2006 00:00:00 +0000
 		{
 			"Jan-15-2006",

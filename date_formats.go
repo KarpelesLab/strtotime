@@ -165,7 +165,7 @@ func parseTwoDigitYear(year int) int {
 	return year
 }
 
-// parseDateTimeFormat parses "YYYY-MM-DD HH:MM:SS" without regexp
+// parseDateTimeFormat parses "YYYY-MM-DD HH:MM:SS" and optionally a timezone offset
 func parseDateTimeFormat(str string, loc *time.Location) (time.Time, bool) {
 	// Find the space separating date from time
 	spaceIdx := strings.IndexByte(str, ' ')
@@ -174,36 +174,36 @@ func parseDateTimeFormat(str string, loc *time.Location) (time.Time, bool) {
 	}
 
 	datePart := str[:spaceIdx]
-	timePart := strings.TrimSpace(str[spaceIdx+1:])
+	rest := strings.TrimSpace(str[spaceIdx+1:])
 
-	// Time part must be exactly H:M:S (no trailing content)
-	timeParts := strings.Split(timePart, ":")
-	if len(timeParts) != 3 {
-		return time.Time{}, false
-	}
-
-	// Validate time parts are numeric
-	for _, tp := range timeParts {
-		if !isAllDigits(tp) || len(tp) == 0 {
-			return time.Time{}, false
-		}
-	}
-
-	hour, _ := strconv.Atoi(timeParts[0])
-	minute, _ := strconv.Atoi(timeParts[1])
-	second, _ := strconv.Atoi(timeParts[2])
-
-	if hour < 0 || hour > 23 || minute < 0 || minute > 59 || second < 0 || second > 59 {
-		return time.Time{}, false
-	}
-
-	// Parse the date
-	t, ok := parseISOFormat(datePart, loc)
+	// Parse time using the ISO 8601 time parser (handles HH:MM:SS and fractional seconds)
+	hour, minute, second, nanos, consumed, ok := parseISO8601Time(rest)
 	if !ok {
 		return time.Time{}, false
 	}
 
-	return time.Date(t.Year(), t.Month(), t.Day(), hour, minute, second, 0, loc), true
+	// Parse the date
+	t, dateOk := parseISOFormat(datePart, loc)
+	if !dateOk {
+		return time.Time{}, false
+	}
+
+	// Check for timezone offset after the time
+	tzLoc := loc
+	tzRest := rest[consumed:]
+	if len(tzRest) > 0 {
+		if parsed, _, ok := parseNumericTimezoneOffset(tzRest); ok {
+			tzLoc = parsed
+		} else {
+			// Not a numeric offset — might be handled by parseWithTimezone later
+			// Only match if there's no trailing content
+			if len(strings.TrimSpace(tzRest)) > 0 {
+				return time.Time{}, false
+			}
+		}
+	}
+
+	return time.Date(t.Year(), t.Month(), t.Day(), hour, minute, second, nanos, tzLoc), true
 }
 
 // splitDateAndRest splits a string into a date portion and the rest after whitespace.
