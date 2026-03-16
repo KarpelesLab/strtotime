@@ -1,7 +1,6 @@
 package strtotime
 
 import (
-	"regexp"
 	"strconv"
 	"strings"
 	"testing"
@@ -26,7 +25,7 @@ func TestPHPInvalidInputs(t *testing.T) {
 		{"MixedFormatting", "2023/01-15", nil},
 		{"NoDigits", "abcdef", nil},
 		{"InvalidTimezone", "2023-01-01 NotATimeZone", parseInvalidTimezone},
-		{"OversizedValues", "9999999999999-01-01", parseOversizedYear},
+		{"OversizedValues", "99999999999999999999-01-01", parseOversizedYear}, // overflows int64
 		{"JustSpecialChars", "!@#$%^&*()", nil},
 		{"InvalidRelative", "next month month", nil},
 		{"PartialDate", "2023-", nil},
@@ -147,18 +146,22 @@ func parseInvalidMonthISO(input string) bool {
 
 func parseInvalidTimezone(input string) bool {
 	// Check if it contains a date followed by an invalid timezone
-	if matches := regexp.MustCompile(`^\d{4}-\d{1,2}-\d{1,2}\s+([A-Za-z0-9/_.]+)`).FindStringSubmatch(input); matches != nil {
-		tzString := matches[1]
+	parts := strings.SplitN(input, " ", 2)
+	if len(parts) == 2 && strings.Count(parts[0], "-") == 2 {
+		tzString := strings.TrimSpace(parts[1])
 		_, found := tryParseTimezone(tzString)
-		return !found // Return true if timezone is not found
+		return !found
 	}
 	return false
 }
 
 func parseOversizedYear(input string) bool {
-	if matches := regexp.MustCompile(`^(\d+)-\d{1,2}-\d{1,2}`).FindStringSubmatch(input); matches != nil {
-		yearStr := matches[1]
-		return len(yearStr) > 4 // Oversized year
+	// Large years are valid now (like PHP), so this just checks
+	// if the input is a date with a very large year that may overflow
+	parts := strings.SplitN(input, "-", 2)
+	if len(parts) >= 1 && isAllDigits(parts[0]) {
+		_, err := strconv.Atoi(parts[0])
+		return err != nil // Only invalid if it overflows int
 	}
 	return false
 }

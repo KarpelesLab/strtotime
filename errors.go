@@ -32,7 +32,7 @@ func NewInvalidDateError(year, month, day int) error {
 // IsValidDate checks if the date components form a valid date
 func IsValidDate(year, month, day int) bool {
 	// Basic validation
-	if year < 1 || year > 9999 || month < 1 || month > 12 || day < 1 {
+	if year < 1 || month < 1 || month > 12 || day < 1 {
 		return false
 	}
 	

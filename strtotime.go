@@ -3,7 +3,6 @@ package strtotime
 import (
 	"errors"
 	"fmt"
-	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -118,29 +117,8 @@ nextFormat:
 	}
 
 	// Try to parse datetime format (YYYY-MM-DD HH:MM:SS)
-	dateTimeRe := regexp.MustCompile(`^(\d{4}-\d{1,2}-\d{1,2})\s+(\d{1,2}):(\d{1,2}):(\d{1,2})$`)
-	if matches := dateTimeRe.FindStringSubmatch(str); matches != nil {
-		// Parse the date part
-		datePart := matches[1]
-		hour, errH := strconv.Atoi(matches[2])
-		minute, errM := strconv.Atoi(matches[3])
-		second, errS := strconv.Atoi(matches[4])
-		
-		// Validate time components
-		if errH != nil || hour < 0 || hour > 23 || 
-		   errM != nil || minute < 0 || minute > 59 || 
-		   errS != nil || second < 0 || second > 59 {
-			return time.Time{}, fmt.Errorf("invalid time components in datetime: %s", str)
-		}
-		
-		// Parse the date
-		t, ok := parseISOFormat(datePart, loc)
-		if !ok {
-			return time.Time{}, fmt.Errorf("invalid date format in datetime: %s", str)
-		}
-		
-		// Add the time components
-		return time.Date(t.Year(), t.Month(), t.Day(), hour, minute, second, 0, loc), nil
+	if t, ok := parseDateTimeFormat(str, loc); ok {
+		return t, nil
 	}
 	
 	// Try date with timezone format
@@ -460,17 +438,24 @@ func (p *Parser) tryParseStandardDate() (time.Time, bool, error) {
 	
 	switch separator {
 	case "-":
-		// ISO format: YYYY-MM-DD
-		if len(p.tokens[p.position].Val) == 4 { // YYYY format
+		// ISO format: YYYY-MM-DD or D-M-YYYY
+		if len(p.tokens[p.position].Val) >= 4 {
 			year, month, day = firstNum, secondNum, thirdNum
+		} else if len(p.tokens[p.position+4].Val) >= 4 {
+			// D-M-YYYY (European style with dashes)
+			day, month, year = firstNum, secondNum, thirdNum
 		} else {
-			return time.Time{}, false, nil
+			// Short year, try as Y-M-D
+			year, month, day = firstNum, secondNum, thirdNum
+			if year < 100 {
+				year = parseTwoDigitYear(year)
+			}
 		}
 	case "/":
 		// Could be YYYY/MM/DD or MM/DD/YYYY
-		if len(p.tokens[p.position].Val) == 4 { // YYYY/MM/DD
+		if len(p.tokens[p.position].Val) >= 4 {
 			year, month, day = firstNum, secondNum, thirdNum
-		} else if len(p.tokens[p.position+4].Val) == 4 { // MM/DD/YYYY
+		} else if len(p.tokens[p.position+4].Val) >= 4 {
 			month, day, year = firstNum, secondNum, thirdNum
 		} else {
 			return time.Time{}, false, nil
@@ -526,49 +511,18 @@ func (p *Parser) tryParseNextLastExpression() (time.Time, bool, error) {
 	p.position++
 
 	// Handle special case: "next week" and "last week"
+	// PHP treats Monday as the first day of the week.
 	if unitToken.Val == UnitWeek {
+		dayOfWeek := int(p.result.Weekday())
+		// Days since this week's Monday (Go weekday: 0=Sun,1=Mon,...,6=Sat)
+		daysSinceMonday := (dayOfWeek + 6) % 7
+
 		if isNext {
-			// Next week means the Monday of next week
-			dayOfWeek := int(p.result.Weekday())
-			var daysToAdd int
-			switch dayOfWeek {
-			case 0: // Sunday
-				daysToAdd = 1 // Next Monday is 1 day away
-			case 1: // Monday
-				daysToAdd = 0 // This is already Monday
-			case 2: // Tuesday
-				daysToAdd = 6 // Next Monday is 6 days away
-			case 3: // Wednesday
-				daysToAdd = 5 // Next Monday is 5 days away
-			case 4: // Thursday
-				daysToAdd = 4 // Next Monday is 4 days away
-			case 5: // Friday
-				daysToAdd = 3 // Next Monday is 3 days away
-			case 6: // Saturday
-				daysToAdd = 2 // Next Monday is 2 days away
-			}
-			return p.result.AddDate(0, 0, daysToAdd), true, nil
+			// Next week = next Monday (always 1-7 days ahead)
+			return p.result.AddDate(0, 0, 7-daysSinceMonday), true, nil
 		} else {
-			// Last week means the Monday of the previous week
-			dayOfWeek := int(p.result.Weekday())
-			var daysToSubtract int
-			switch dayOfWeek {
-			case 0: // Sunday
-				daysToSubtract = 6 // Last Monday was 6 days ago
-			case 1: // Monday
-				daysToSubtract = 7 // Last Monday was a week ago
-			case 2: // Tuesday
-				daysToSubtract = 8 // Last Monday was 8 days ago
-			case 3: // Wednesday
-				daysToSubtract = 9 // Last Monday was 9 days ago
-			case 4: // Thursday
-				daysToSubtract = 10 // Last Monday was 10 days ago
-			case 5: // Friday
-				daysToSubtract = 11 // Last Monday was 11 days ago
-			case 6: // Saturday
-				daysToSubtract = 12 // Last Monday was 12 days ago
-			}
-			return p.result.AddDate(0, 0, -daysToSubtract), true, nil
+			// Last week = previous week's Monday (always 7-13 days back)
+			return p.result.AddDate(0, 0, -(daysSinceMonday + 7)), true, nil
 		}
 	}
 
@@ -639,18 +593,11 @@ func isCompoundExpression(str string) bool {
 // parseDateWithRelativeTime parses a date followed by a relative time adjustment
 // Examples: "2023-05-30 -1 month" or "2022-01-01 +1 year"
 func parseDateWithRelativeTime(str string, now time.Time, loc *time.Location, opts []Option) (time.Time, bool) {
-	dateTimeRe := regexp.MustCompile(`^(\d{4}-\d{1,2}-\d{1,2}|\d{4}/\d{1,2}/\d{1,2}|\d{1,2}/\d{1,2}/\d{4}|\d{1,2}\.\d{1,2}\.\d{2,4})\s+(.+)$`)
-	if !dateTimeRe.MatchString(str) {
+	// Split on first whitespace to get date part and rest
+	datePart, timePart, ok := splitDateAndRest(str)
+	if !ok {
 		return time.Time{}, false
 	}
-	
-	matches := dateTimeRe.FindStringSubmatch(str)
-	if len(matches) != 3 {
-		return time.Time{}, false
-	}
-	
-	datePart := matches[1]
-	timePart := matches[2]
 	
 	// Parse the date part
 	dateResult, err := StrToTime(datePart, append(opts, Rel(now))...)
@@ -867,6 +814,9 @@ func (p *Parser) tryParseImplicitRelativeTime() (time.Time, bool, error) {
 		return time.Time{}, false, nil
 	}
 
+	// Save position for rollback on failure
+	startPos := p.position
+
 	// Check for a number (the amount)
 	token := p.tokens[p.position]
 	if token.Typ != TypeNumber {
@@ -886,12 +836,14 @@ func (p *Parser) tryParseImplicitRelativeTime() (time.Time, bool, error) {
 
 	// Check for the unit
 	if p.position >= len(p.tokens) {
-		return time.Time{}, false, fmt.Errorf("%w after %d", ErrExpectedTimeUnit, amount)
+		p.position = startPos
+		return time.Time{}, false, nil
 	}
 
 	unitToken := p.tokens[p.position]
 	if unitToken.Typ != TypeString {
-		return time.Time{}, false, fmt.Errorf("%w after %d, got %s", ErrExpectedTimeUnit, amount, unitToken.Val)
+		p.position = startPos
+		return time.Time{}, false, nil
 	}
 
 	p.position++
@@ -899,7 +851,8 @@ func (p *Parser) tryParseImplicitRelativeTime() (time.Time, bool, error) {
 	// Process the unit by calling the common helper function
 	result, err := p.applyTimeUnitOffset(amount, unitToken.Val)
 	if err != nil {
-		return time.Time{}, false, err
+		p.position = startPos
+		return time.Time{}, false, nil
 	}
 
 	return result, true, nil
@@ -940,9 +893,15 @@ func (p *Parser) tryParseMonthOnlyFormat() (time.Time, bool, error) {
 	// Consume the month token
 	p.position++
 
-	// Use the current year and day 1 of the given month
+	// Use the current year and preserve the day from the base time (PHP behavior)
 	year := p.result.Year()
-	day := 1
+	day := p.result.Day()
+
+	// Clamp day to the max days in the target month
+	maxDays := daysInMonth(year, month)
+	if day > maxDays {
+		day = maxDays
+	}
 
 	return time.Date(year, month, day, 0, 0, 0, 0, p.loc), true, nil
 }

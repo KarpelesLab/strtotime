@@ -29,9 +29,10 @@ func TestMonthOnly(t *testing.T) {
 				t.Errorf("Expected month to be %s, got %s", test.month, result.Month())
 			}
 
-			// Day should be 1 for month-only inputs
-			if result.Day() != 1 {
-				t.Errorf("Expected day to be 1, got %d", result.Day())
+			// Day should be preserved from current date (PHP behavior)
+			currentDay := time.Now().Day()
+			if result.Day() != currentDay {
+				t.Errorf("Expected day to be %d (current day), got %d", currentDay, result.Day())
 			}
 
 			// Should be current year
