@@ -950,12 +950,19 @@ func (p *Parser) tryParseMonthNameFormat() (time.Time, bool, error) {
 	if p.position < len(p.tokens) {
 		yearToken := p.tokens[p.position]
 		if yearToken.Typ == TypeNumber {
-			yearVal, err := strconv.Atoi(yearToken.Val)
-			if err != nil {
-				return time.Time{}, false, fmt.Errorf("invalid year: %s", yearToken.Val)
+			// Check if this number is actually a time (followed by ':')
+			// If so, don't consume it as a year
+			isTime := p.position+1 < len(p.tokens) &&
+				p.tokens[p.position+1].Typ == TypeOperator &&
+				p.tokens[p.position+1].Val == ":"
+			if !isTime {
+				yearVal, err := strconv.Atoi(yearToken.Val)
+				if err != nil {
+					return time.Time{}, false, fmt.Errorf("invalid year: %s", yearToken.Val)
+				}
+				year = yearVal
+				p.position++
 			}
-			year = yearVal
-			p.position++
 		}
 	}
 
@@ -970,7 +977,7 @@ func (p *Parser) tryParseMonthNameFormat() (time.Time, bool, error) {
 	// Check for time (optional)
 	// Format: HH:MM:SS
 	p.skipWhitespace()
-	if p.position+4 < len(p.tokens) &&
+	if p.position+2 < len(p.tokens) &&
 		p.tokens[p.position].Typ == TypeNumber && // HH
 		p.tokens[p.position+1].Typ == TypeOperator && p.tokens[p.position+1].Val == ":" &&
 		p.tokens[p.position+2].Typ == TypeNumber { // MM
