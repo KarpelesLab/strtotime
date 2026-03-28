@@ -163,6 +163,170 @@ func TestNumberedWeekday(t *testing.T) {
 	}
 }
 
+func TestNumberedWeekdayRelative(t *testing.T) {
+	tests := []struct {
+		input     string
+		reference time.Time
+		expected  time.Time
+	}{
+		{
+			// First Monday of January 2009 = Jan 5
+			"first monday of next month",
+			time.Date(2008, 12, 1, 0, 0, 0, 0, time.UTC),
+			time.Date(2009, 1, 5, 0, 0, 0, 0, time.UTC),
+		},
+		{
+			// Last Friday of November 2008 = Nov 28
+			"last friday of last month",
+			time.Date(2008, 12, 1, 0, 0, 0, 0, time.UTC),
+			time.Date(2008, 11, 28, 0, 0, 0, 0, time.UTC),
+		},
+		{
+			// Second Tuesday of February 2025 = Feb 11
+			"second tuesday of next month",
+			time.Date(2025, 1, 15, 0, 0, 0, 0, time.UTC),
+			time.Date(2025, 2, 11, 0, 0, 0, 0, time.UTC),
+		},
+		{
+			// First Wednesday of February 2025 = Feb 5
+			"first wednesday of last month",
+			time.Date(2025, 3, 15, 0, 0, 0, 0, time.UTC),
+			time.Date(2025, 2, 5, 0, 0, 0, 0, time.UTC),
+		},
+		{
+			// First Sunday of January 2009 = Jan 4
+			"first sunday of next year",
+			time.Date(2008, 12, 1, 0, 0, 0, 0, time.UTC),
+			time.Date(2009, 1, 4, 0, 0, 0, 0, time.UTC),
+		},
+		{
+			// Last Friday of December 2008 = Dec 26
+			"last friday of last year",
+			time.Date(2009, 3, 15, 0, 0, 0, 0, time.UTC),
+			time.Date(2008, 12, 26, 0, 0, 0, 0, time.UTC),
+		},
+		{
+			// Third Thursday of next month (Feb 2025) = Feb 20
+			"third thursday of next month",
+			time.Date(2025, 1, 10, 0, 0, 0, 0, time.UTC),
+			time.Date(2025, 2, 20, 0, 0, 0, 0, time.UTC),
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.input, func(t *testing.T) {
+			result, ok := parseNumberedWeekday(test.input, test.reference, time.UTC)
+			if !ok {
+				t.Fatalf("Failed to parse '%s'", test.input)
+			}
+			if !result.Equal(test.expected) {
+				t.Errorf("For input '%s': Expected %s, got %s",
+					test.input,
+					test.expected.Format("2006-01-02 (Monday)"),
+					result.Format("2006-01-02 (Monday)"))
+			}
+		})
+	}
+}
+
+func TestDayOfMonth(t *testing.T) {
+	reference := time.Date(2025, 6, 15, 0, 0, 0, 0, time.UTC)
+
+	tests := []struct {
+		input    string
+		expected time.Time
+	}{
+		{
+			"first day of december 2025",
+			time.Date(2025, 12, 1, 0, 0, 0, 0, time.UTC),
+		},
+		{
+			"last day of february 2024",
+			time.Date(2024, 2, 29, 0, 0, 0, 0, time.UTC), // leap year
+		},
+		{
+			"last day of february 2025",
+			time.Date(2025, 2, 28, 0, 0, 0, 0, time.UTC), // non-leap year
+		},
+		{
+			"third day of january 2025",
+			time.Date(2025, 1, 3, 0, 0, 0, 0, time.UTC),
+		},
+		{
+			"fifth day of march",
+			time.Date(2025, 3, 5, 0, 0, 0, 0, time.UTC),
+		},
+		{
+			"last day of december 2025",
+			time.Date(2025, 12, 31, 0, 0, 0, 0, time.UTC),
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.input, func(t *testing.T) {
+			result, ok := parseNumberedWeekday(test.input, reference, time.UTC)
+			if !ok {
+				t.Fatalf("Failed to parse '%s'", test.input)
+			}
+			if !result.Equal(test.expected) {
+				t.Errorf("For input '%s': Expected %s, got %s",
+					test.input,
+					test.expected.Format("2006-01-02"),
+					result.Format("2006-01-02"))
+			}
+		})
+	}
+}
+
+func TestDayOfMonthRelative(t *testing.T) {
+	tests := []struct {
+		input     string
+		reference time.Time
+		expected  time.Time
+	}{
+		{
+			"first day of next month",
+			time.Date(2008, 12, 15, 0, 0, 0, 0, time.UTC),
+			time.Date(2009, 1, 1, 0, 0, 0, 0, time.UTC),
+		},
+		{
+			"last day of last month",
+			time.Date(2025, 3, 15, 0, 0, 0, 0, time.UTC),
+			time.Date(2025, 2, 28, 0, 0, 0, 0, time.UTC),
+		},
+		{
+			"last day of next month",
+			time.Date(2024, 1, 15, 0, 0, 0, 0, time.UTC),
+			time.Date(2024, 2, 29, 0, 0, 0, 0, time.UTC), // leap year
+		},
+		{
+			"first day of next year",
+			time.Date(2025, 6, 15, 0, 0, 0, 0, time.UTC),
+			time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+		},
+		{
+			"last day of last year",
+			time.Date(2025, 6, 15, 0, 0, 0, 0, time.UTC),
+			time.Date(2024, 12, 31, 0, 0, 0, 0, time.UTC),
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.input, func(t *testing.T) {
+			result, ok := parseNumberedWeekday(test.input, test.reference, time.UTC)
+			if !ok {
+				t.Fatalf("Failed to parse '%s'", test.input)
+			}
+			if !result.Equal(test.expected) {
+				t.Errorf("For input '%s': Expected %s, got %s",
+					test.input,
+					test.expected.Format("2006-01-02"),
+					result.Format("2006-01-02"))
+			}
+		})
+	}
+}
+
 func TestStrToTimeWithExtendedFormats(t *testing.T) {
 	// Reference time: December 1, 2008
 	reference := time.Date(2008, 12, 1, 10, 0, 0, 0, time.UTC)
@@ -198,6 +362,22 @@ func TestStrToTimeWithExtendedFormats(t *testing.T) {
 		{
 			"last Monday December 2008",
 			time.Date(2008, 12, 29, 0, 0, 0, 0, time.UTC),
+		},
+		{
+			"first monday of next month",
+			time.Date(2009, 1, 5, 0, 0, 0, 0, time.UTC),
+		},
+		{
+			"last friday of last month",
+			time.Date(2008, 11, 28, 0, 0, 0, 0, time.UTC),
+		},
+		{
+			"first day of next month",
+			time.Date(2009, 1, 1, 0, 0, 0, 0, time.UTC),
+		},
+		{
+			"last day of december 2008",
+			time.Date(2008, 12, 31, 0, 0, 0, 0, time.UTC),
 		},
 	}
 

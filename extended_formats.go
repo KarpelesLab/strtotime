@@ -223,13 +223,18 @@ func parseNumberedWeekday(str string, now time.Time, loc *time.Location) (time.T
 	}
 	idx++
 
-	// Parse the day of week
+	// Parse the day of week or "day" keyword
 	if idx >= len(fields) {
 		return time.Time{}, false
 	}
+	isDayOfMonth := false
 	dayOfWeek := getDayOfWeek(fields[idx])
 	if dayOfWeek < 0 {
-		return time.Time{}, false
+		if strings.ToLower(fields[idx]) == "day" {
+			isDayOfMonth = true
+		} else {
+			return time.Time{}, false
+		}
 	}
 	idx++
 
@@ -238,25 +243,65 @@ func parseNumberedWeekday(str string, now time.Time, loc *time.Location) (time.T
 		idx++
 	}
 
-	// Parse the month
+	// Parse the month context: either a literal month name or "next/last month/year"
 	if idx >= len(fields) {
 		return time.Time{}, false
 	}
-	month, ok := getMonthByName(fields[idx])
-	if !ok {
-		return time.Time{}, false
-	}
-	idx++
 
-	// Parse the optional year
-	year := now.Year()
-	if idx < len(fields) {
-		var err error
-		year, err = strconv.Atoi(fields[idx])
-		if err != nil || year < 1 || year > 9999 {
+	var month time.Month
+	var year int
+
+	direction := strings.ToLower(fields[idx])
+	if direction == DirectionNext || direction == DirectionLast {
+		// Relative month/year: "next month", "last year", etc.
+		idx++
+		if idx >= len(fields) {
+			return time.Time{}, false
+		}
+		unit := normalizeTimeUnit(fields[idx])
+		idx++
+
+		switch unit {
+		case UnitMonth:
+			if direction == DirectionNext {
+				ref := now.AddDate(0, 1, 0)
+				month = ref.Month()
+				year = ref.Year()
+			} else {
+				ref := now.AddDate(0, -1, 0)
+				month = ref.Month()
+				year = ref.Year()
+			}
+		case UnitYear:
+			if direction == DirectionNext {
+				month = time.January
+				year = now.Year() + 1
+			} else {
+				month = time.December
+				year = now.Year() - 1
+			}
+		default:
+			return time.Time{}, false
+		}
+	} else {
+		// Literal month name
+		var ok bool
+		month, ok = getMonthByName(fields[idx])
+		if !ok {
 			return time.Time{}, false
 		}
 		idx++
+
+		// Parse the optional year
+		year = now.Year()
+		if idx < len(fields) {
+			var err error
+			year, err = strconv.Atoi(fields[idx])
+			if err != nil || year < 1 || year > 9999 {
+				return time.Time{}, false
+			}
+			idx++
+		}
 	}
 
 	// Make sure we consumed all fields
@@ -264,38 +309,48 @@ func parseNumberedWeekday(str string, now time.Time, loc *time.Location) (time.T
 		return time.Time{}, false
 	}
 
-	// Find the first day of the month
-	firstOfMonth := time.Date(year, month, 1, 0, 0, 0, 0, loc)
-
-	// Find the first occurrence of the specified day of week
-	firstDayOfWeek := int(firstOfMonth.Weekday())
-	daysUntilFirst := (dayOfWeek - firstDayOfWeek + 7) % 7
-
 	var resultDay int
 
-	if ordinal > 0 {
-		// Calculate the day for the nth occurrence
-		resultDay = 1 + daysUntilFirst + (ordinal-1)*7
-
-		// Check if this date exists in the month
-		lastDayOfMonth := daysInMonth(year, month)
-		if resultDay > lastDayOfMonth {
+	if isDayOfMonth {
+		// "first/last day of" — use ordinal directly as the day number
+		lastDay := daysInMonth(year, month)
+		if ordinal > 0 {
+			resultDay = ordinal
+			if resultDay > lastDay {
+				return time.Time{}, false
+			}
+		} else if ordinal == -1 {
+			resultDay = lastDay
+		} else {
 			return time.Time{}, false
 		}
-	} else if ordinal == -1 {
-		// Handle "last" occurrence
-		lastDayOfMonth := daysInMonth(year, month)
-		lastOfMonth := time.Date(year, month, lastDayOfMonth, 0, 0, 0, 0, loc)
-		lastDayOfWeek := int(lastOfMonth.Weekday())
-
-		if lastDayOfWeek == dayOfWeek {
-			resultDay = lastDayOfMonth
-		} else {
-			daysToSubtract := (lastDayOfWeek - dayOfWeek + 7) % 7
-			resultDay = lastDayOfMonth - daysToSubtract
-		}
 	} else {
-		return time.Time{}, false
+		// Weekday-based: find the nth occurrence of the specified day of week
+		firstOfMonth := time.Date(year, month, 1, 0, 0, 0, 0, loc)
+		firstDayOfWeek := int(firstOfMonth.Weekday())
+		daysUntilFirst := (dayOfWeek - firstDayOfWeek + 7) % 7
+
+		if ordinal > 0 {
+			resultDay = 1 + daysUntilFirst + (ordinal-1)*7
+
+			lastDayOfMonth := daysInMonth(year, month)
+			if resultDay > lastDayOfMonth {
+				return time.Time{}, false
+			}
+		} else if ordinal == -1 {
+			lastDayOfMonth := daysInMonth(year, month)
+			lastOfMonth := time.Date(year, month, lastDayOfMonth, 0, 0, 0, 0, loc)
+			lastDayOfWeek := int(lastOfMonth.Weekday())
+
+			if lastDayOfWeek == dayOfWeek {
+				resultDay = lastDayOfMonth
+			} else {
+				daysToSubtract := (lastDayOfWeek - dayOfWeek + 7) % 7
+				resultDay = lastDayOfMonth - daysToSubtract
+			}
+		} else {
+			return time.Time{}, false
+		}
 	}
 
 	return time.Date(year, month, resultDay, 0, 0, 0, 0, loc), true
