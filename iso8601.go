@@ -300,10 +300,7 @@ func parseISOWeekDate(str string, loc *time.Location) (time.Time, bool) {
 	}
 
 	// Extract year part (strip trailing dash)
-	yearPart := str[:wIdx]
-	if strings.HasSuffix(yearPart, "-") {
-		yearPart = yearPart[:len(yearPart)-1]
-	}
+	yearPart := strings.TrimSuffix(str[:wIdx], "-")
 	if !isAllDigits(yearPart) || len(yearPart) == 0 {
 		return time.Time{}, false
 	}

@@ -110,7 +110,7 @@ func TestHTTPLogFormat(t *testing.T) {
 func TestNumberedWeekday(t *testing.T) {
 	// Reference date: 2008-12-01 is a Monday
 	reference := time.Date(2008, 12, 1, 0, 0, 0, 0, time.UTC)
-	
+
 	tests := []struct {
 		input    string
 		expected time.Time
@@ -154,7 +154,7 @@ func TestNumberedWeekday(t *testing.T) {
 
 			// Compare the parsed time with the expected time
 			if !result.Equal(test.expected) {
-				t.Errorf("For input '%s': Expected %v, got %v", 
+				t.Errorf("For input '%s': Expected %v, got %v",
 					test.input,
 					test.expected.Format("2006-01-02 (Monday)"),
 					result.Format("2006-01-02 (Monday)"))
@@ -330,7 +330,7 @@ func TestDayOfMonthRelative(t *testing.T) {
 func TestStrToTimeWithExtendedFormats(t *testing.T) {
 	// Reference time: December 1, 2008
 	reference := time.Date(2008, 12, 1, 10, 0, 0, 0, time.UTC)
-	
+
 	tests := []struct {
 		input    string
 		expected time.Time
@@ -393,7 +393,7 @@ func TestStrToTimeWithExtendedFormats(t *testing.T) {
 			resultTS := result.Unix()
 
 			if expectedTS != resultTS {
-				t.Errorf("For input '%s': Expected %s, got %s", 
+				t.Errorf("For input '%s': Expected %s, got %s",
 					test.input,
 					test.expected.Format("2006-01-02 15:04:05 MST"),
 					result.Format("2006-01-02 15:04:05 MST"))

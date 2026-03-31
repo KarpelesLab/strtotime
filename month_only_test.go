@@ -29,10 +29,15 @@ func TestMonthOnly(t *testing.T) {
 				t.Errorf("Expected month to be %s, got %s", test.month, result.Month())
 			}
 
-			// Day should be preserved from current date (PHP behavior)
+			// Day should be preserved from current date, clamped to max days in target month
 			currentDay := time.Now().Day()
-			if result.Day() != currentDay {
-				t.Errorf("Expected day to be %d (current day), got %d", currentDay, result.Day())
+			expectedDay := currentDay
+			maxDays := daysInMonth(time.Now().Year(), test.month)
+			if expectedDay > maxDays {
+				expectedDay = maxDays
+			}
+			if result.Day() != expectedDay {
+				t.Errorf("Expected day to be %d, got %d", expectedDay, result.Day())
 			}
 
 			// Should be current year

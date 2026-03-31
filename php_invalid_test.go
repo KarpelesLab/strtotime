@@ -11,7 +11,7 @@ func TestPHPInvalidInputs(t *testing.T) {
 	tests := []struct {
 		name  string
 		input string
-		parse func(string) bool  // Custom parser for problematic cases
+		parse func(string) bool // Custom parser for problematic cases
 	}{
 		{"Empty", "", nil},
 		{"OnlyWhitespace", "   ", nil},
@@ -40,7 +40,7 @@ func TestPHPInvalidInputs(t *testing.T) {
 					return
 				}
 			}
-			
+
 			// Normal test
 			result, err := StrToTime(test.input)
 			if err == nil {
@@ -61,22 +61,22 @@ func parseInvalidDateFormat(input string) bool {
 		year, yearErr := strconv.Atoi(hyphenParts[0])
 		month, monthErr := strconv.Atoi(hyphenParts[1])
 		day, dayErr := strconv.Atoi(hyphenParts[2])
-		
+
 		// Check for valid year (must be positive)
 		if yearErr == nil && year <= 0 {
 			return true
 		}
-		
+
 		// Check for invalid month
 		if monthErr == nil && (month <= 0 || month > 12) {
 			return true
 		}
-		
+
 		// Check for invalid day
 		if dayErr == nil && (day <= 0 || day > 31) {
 			return true
 		}
-		
+
 		// Check for invalid day for specific months
 		if yearErr == nil && monthErr == nil && dayErr == nil {
 			maxDays := 31
@@ -90,31 +90,31 @@ func parseInvalidDateFormat(input string) bool {
 					maxDays = 28
 				}
 			}
-			
+
 			if day > maxDays {
 				return true
 			}
 		}
 	}
-	
+
 	// Similarly for slash format
 	slashParts := strings.Split(input, "/")
 	if len(slashParts) == 3 {
 		// Similar checks as above
 		// (Could be expanded as needed)
 	}
-	
+
 	return false
 }
 
 func parseFebruaryEdgeCase(input string) bool {
 	// Parse manually without using the StrToTime function
 	if strings.Contains(strings.ToLower(input), "february 30") ||
-	   strings.Contains(strings.ToLower(input), "february 31") {
+		strings.Contains(strings.ToLower(input), "february 31") {
 		// These are definitely invalid
 		return true
 	}
-	
+
 	// For "February 29" in non-leap years, we'd need to parse the year
 	if strings.Contains(strings.ToLower(input), "february 29") {
 		// Extract the year
@@ -128,7 +128,7 @@ func parseFebruaryEdgeCase(input string) bool {
 			}
 		}
 	}
-	
+
 	return false
 }
 
@@ -207,7 +207,7 @@ func TestEdgeCases(t *testing.T) {
 					return
 				}
 			}
-			
+
 			_, err := StrToTime(test.input)
 			if err == nil {
 				t.Errorf("Expected error for input '%s', but got successful parse", test.input)

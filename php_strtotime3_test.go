@@ -317,10 +317,10 @@ func TestPHPStrtotimeOriginal(t *testing.T) {
 // TestLargeYears tests that years beyond 4 digits work correctly
 func TestLargeYears(t *testing.T) {
 	tests := []struct {
-		input    string
-		year     int
-		month    time.Month
-		day      int
+		input string
+		year  int
+		month time.Month
+		day   int
 	}{
 		{"10000-01-01", 10000, 1, 1},
 		{"20000-06-15", 20000, 6, 15},

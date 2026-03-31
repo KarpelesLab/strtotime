@@ -233,7 +233,8 @@ func getMonthByNameFlex(name string) (time.Month, bool) {
 // parseDayMonthYear parses formats like "DD Mon YYYY", "DD-Mon-YYYY", "DDMonYYYY"
 // with optional time and timezone. Also handles day-of-week prefix and ordinal suffix.
 // Examples: "11 Oct 2005", "11-MAY-1988 12:00:00AM", "11Oct2005",
-//   "Sat 26th Nov 2005 18:18", "Thu, 20 Nov 2003 16:20:42 +0000"
+//
+//	"Sat 26th Nov 2005 18:18", "Thu, 20 Nov 2003 16:20:42 +0000"
 func parseDayMonthYear(str string, loc *time.Location) (time.Time, bool) {
 	s := str
 
@@ -510,7 +511,7 @@ func parseTimeBeforeDate(str string, loc *time.Location) (time.Time, bool) {
 	dateFields := strings.Fields(dateStr)
 	if len(dateFields) >= 2 {
 		if month, ok := getMonthByNameFlex(dateFields[0]); ok {
-			dayStr := strings.TrimRight(dateFields[1], "stndrdth,")
+			dayStr := stripOrdinalSuffix(strings.TrimSuffix(dateFields[1], ","))
 			day, err := strconv.Atoi(dayStr)
 			if err == nil && day >= 1 && day <= 31 {
 				year := time.Now().Year()
@@ -681,7 +682,7 @@ func parseMonthDayTimeYear(str string, loc *time.Location) (time.Time, bool) {
 		return time.Time{}, false
 	}
 
-	dayStr := strings.TrimRight(fields[1], "stndrdth,")
+	dayStr := stripOrdinalSuffix(strings.TrimSuffix(fields[1], ","))
 	day, err := strconv.Atoi(dayStr)
 	if err != nil || day < 1 || day > 31 {
 		return time.Time{}, false

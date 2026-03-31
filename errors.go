@@ -35,7 +35,7 @@ func IsValidDate(year, month, day int) bool {
 	if year < 1 || month < 1 || month > 12 || day < 1 {
 		return false
 	}
-	
+
 	// Month-specific validation
 	maxDays := 31
 	switch month {
@@ -48,7 +48,7 @@ func IsValidDate(year, month, day int) bool {
 			maxDays = 28
 		}
 	}
-	
+
 	return day <= maxDays
 }
 

@@ -7,8 +7,6 @@ import (
 	"unicode"
 )
 
-
-
 // parseISOFormat tries to parse a ISO format date (YYYY-MM-DD or D-M-YYYY)
 func parseISOFormat(str string, loc *time.Location) (time.Time, bool) {
 	if strings.Count(str, "-") != 2 {
@@ -126,27 +124,27 @@ func parseEuropeanFormat(str string, loc *time.Location) (time.Time, bool) {
 					}
 				}
 			}
-			
+
 			// Parse the components
 			day, dayErr := strconv.Atoi(parts[0])
 			month, monthErr := strconv.Atoi(parts[1])
 			year, yearErr := strconv.Atoi(parts[2])
-			
+
 			// Check for parsing errors
 			if yearErr != nil || monthErr != nil || dayErr != nil {
 				return time.Time{}, false
 			}
-			
+
 			// Handle 2-digit years
 			if year < 100 {
 				year = parseTwoDigitYear(year)
 			}
-			
+
 			// Validate date components
 			if !IsValidDate(year, month, day) {
 				return time.Time{}, false
 			}
-			
+
 			// Valid European format date
 			return time.Date(year, time.Month(month), day, 0, 0, 0, 0, loc), true
 		}

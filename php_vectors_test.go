@@ -64,14 +64,14 @@ func TestPHPSpecificVectors(t *testing.T) {
 			resultUTC := result.Unix()
 
 			if expectedUTC != resultUTC {
-				t.Errorf("For input '%s': expected %s (%d), got %s (%d)", 
-					test.input, 
+				t.Errorf("For input '%s': expected %s (%d), got %s (%d)",
+					test.input,
 					test.expected.Format("2006-01-02 15:04:05 MST"),
 					expectedUTC,
 					result.Format("2006-01-02 15:04:05 MST"),
 					resultUTC)
 			}
-			
+
 			// Check nanoseconds for fractional timestamps
 			if strings.Contains(test.input, ".") {
 				if test.expected.Nanosecond() != result.Nanosecond() {

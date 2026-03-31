@@ -22,13 +22,13 @@ var timezoneAbbreviations = map[string]*time.Location{
 	"hst":  time.FixedZone("HST", -10*3600), // Hawaii Standard Time (UTC-10)
 
 	// European time zones
-	"gmt":  time.UTC,                          // Greenwich Mean Time (UTC+0)
-	"bst":  time.FixedZone("BST", 1*3600),    // British Summer Time (UTC+1)
-	"iet":  time.FixedZone("IET", 1*3600),    // Irish Standard Time (UTC+1)
-	"cet":  time.FixedZone("CET", 1*3600),    // Central European Time (UTC+1)
-	"cest": time.FixedZone("CEST", 2*3600),   // Central European Summer Time (UTC+2)
-	"eet":  time.FixedZone("EET", 2*3600),    // Eastern European Time (UTC+2)
-	"eest": time.FixedZone("EEST", 3*3600),   // Eastern European Summer Time (UTC+3)
+	"gmt":  time.UTC,                       // Greenwich Mean Time (UTC+0)
+	"bst":  time.FixedZone("BST", 1*3600),  // British Summer Time (UTC+1)
+	"iet":  time.FixedZone("IET", 1*3600),  // Irish Standard Time (UTC+1)
+	"cet":  time.FixedZone("CET", 1*3600),  // Central European Time (UTC+1)
+	"cest": time.FixedZone("CEST", 2*3600), // Central European Summer Time (UTC+2)
+	"eet":  time.FixedZone("EET", 2*3600),  // Eastern European Time (UTC+2)
+	"eest": time.FixedZone("EEST", 3*3600), // Eastern European Summer Time (UTC+3)
 
 	// Australian time zones
 	"awst": mustLoadLocation("Australia/Perth"),    // Australian Western Standard Time (UTC+8)
@@ -135,7 +135,7 @@ func tryParseTimezone(tzString string) (*time.Location, bool) {
 	if len(tzString) == 0 {
 		return nil, false
 	}
-	
+
 	// If the timezone contains invalid characters, reject it immediately
 	for _, c := range tzString {
 		// Valid timezone characters: alphanumeric, /, _, -, + and spaces
@@ -143,7 +143,7 @@ func tryParseTimezone(tzString string) (*time.Location, bool) {
 			return nil, false
 		}
 	}
-	
+
 	// Normalize to lowercase for case-insensitive matching
 	tzLower := strings.ToLower(tzString)
 
@@ -178,7 +178,7 @@ func tryParseTimezone(tzString string) (*time.Location, bool) {
 		if len(parts[0]) == 0 || len(parts[1]) == 0 {
 			return nil, false
 		}
-		
+
 		// Convert to proper case: first letter uppercase, rest lowercase
 		region := titleCase(strings.ToLower(parts[0]))
 		city := titleCase(strings.ToLower(parts[1]))
@@ -200,7 +200,7 @@ func tryParseTimezone(tzString string) (*time.Location, bool) {
 			if len(parts[0]) == 0 || len(parts[1]) == 0 {
 				return nil, false
 			}
-			
+
 			// Title case each part and replace spaces with underscore
 			region := titleCase(strings.ToLower(parts[0]))
 			city := titleCase(strings.ToLower(parts[1]))
@@ -220,9 +220,9 @@ func tryParseTimezone(tzString string) (*time.Location, bool) {
 // isValidTimezoneChar checks if a character is valid in a timezone string
 func isValidTimezoneChar(c rune) bool {
 	return (c >= 'a' && c <= 'z') ||
-	       (c >= 'A' && c <= 'Z') ||
-	       (c >= '0' && c <= '9') ||
-	       c == '/' || c == '_' || c == '-' || c == '+' || c == ' '
+		(c >= 'A' && c <= 'Z') ||
+		(c >= '0' && c <= '9') ||
+		c == '/' || c == '_' || c == '-' || c == '+' || c == ' '
 }
 
 // titleCase converts the first letter of each word to uppercase

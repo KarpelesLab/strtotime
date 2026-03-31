@@ -139,7 +139,7 @@ func compileNumberedWeekdayRegex() *regexp.Regexp {
 func parseNumberedWeekdayWithRegex(str string, now time.Time, loc *time.Location, re *regexp.Regexp) (time.Time, bool) {
 	if matches := re.FindStringSubmatch(str); matches != nil {
 		var ordinal int
-		
+
 		// Parse the ordinal (numeric or word)
 		if matches[1] != "" {
 			// Numeric ordinal
@@ -163,38 +163,38 @@ func parseNumberedWeekdayWithRegex(str string, now time.Time, loc *time.Location
 				return time.Time{}, false
 			}
 		}
-		
+
 		// Parse the day of week
 		dayOfWeek := getDayOfWeek(matches[3])
 		if dayOfWeek < 0 {
 			return time.Time{}, false
 		}
-		
+
 		// Parse the month
 		month, ok := getMonthByName(matches[4])
 		if !ok {
 			return time.Time{}, false
 		}
-		
+
 		// Parse the year (optional, default to current year)
 		year := now.Year()
 		if matches[5] != "" {
 			year, _ = strconv.Atoi(matches[5])
 		}
-		
+
 		// Find the first day of the month
 		firstOfMonth := time.Date(year, month, 1, 0, 0, 0, 0, loc)
-		
+
 		// Find the first occurrence of the specified day of week
 		firstDayOfWeek := int(firstOfMonth.Weekday())
 		daysUntilFirst := (dayOfWeek - firstDayOfWeek + 7) % 7
-		
+
 		var resultDay int
-		
+
 		if ordinal > 0 {
 			// Calculate the day for the nth occurrence
 			resultDay = 1 + daysUntilFirst + (ordinal-1)*7
-			
+
 			// Check if this date exists in the month
 			lastDayOfMonth := daysInMonth(year, month)
 			if resultDay > lastDayOfMonth {
@@ -205,7 +205,7 @@ func parseNumberedWeekdayWithRegex(str string, now time.Time, loc *time.Location
 			lastDayOfMonth := daysInMonth(year, month)
 			lastOfMonth := time.Date(year, month, lastDayOfMonth, 0, 0, 0, 0, loc)
 			lastDayOfWeek := int(lastOfMonth.Weekday())
-			
+
 			if lastDayOfWeek == dayOfWeek {
 				resultDay = lastDayOfMonth
 			} else {
@@ -215,9 +215,9 @@ func parseNumberedWeekdayWithRegex(str string, now time.Time, loc *time.Location
 		} else {
 			return time.Time{}, false // Invalid ordinal (should be > 0 or -1)
 		}
-		
+
 		return time.Date(year, month, resultDay, 0, 0, 0, 0, loc), true
 	}
-	
+
 	return time.Time{}, false
 }

@@ -47,11 +47,11 @@ func StrToTime(str string, opts ...Option) (time.Time, error) {
 	if len(str) > 0 && str[0] == '@' {
 		// Parse the Unix timestamp format (e.g., "@1121373041" or "@1121373041.5")
 		unixTimeStr := str[1:]
-		
+
 		// Check if there's a timezone specification after the timestamp
 		tzParts := strings.SplitN(unixTimeStr, " ", 2)
 		timestamp := tzParts[0]
-		
+
 		// Check if timestamp has fractional seconds
 		if idx := strings.Index(timestamp, "."); idx != -1 {
 			// Parse the whole seconds part
@@ -60,47 +60,47 @@ func StrToTime(str string, opts ...Option) (time.Time, error) {
 				// If we can't parse the integer part, don't try to handle as Unix timestamp
 				goto nextFormat
 			}
-			
+
 			// Parse the fractional part as a float
 			fracPart, err := strconv.ParseFloat("0."+timestamp[idx+1:], 64)
 			if err != nil {
 				// If we can't parse the fraction, just use the integer part
 				fracPart = 0.0
 			}
-			
+
 			// Convert fraction to nanoseconds (range: 0-999999999)
 			nanoSec := int64(fracPart * 1e9)
-			
+
 			// Create the time with the proper Unix seconds and nanoseconds
 			result := time.Unix(unixTime, nanoSec).In(loc)
-			
+
 			// If there's a timezone specified, try to use it
 			if len(tzParts) > 1 && tzParts[1] != "" {
 				if tzLoc, found := tryParseTimezone(tzParts[1]); found {
 					result = result.In(tzLoc)
 				}
 			}
-			
+
 			return result, nil
 		} else {
 			// No fractional part, parse as an integer
 			unixTime, err := strconv.ParseInt(timestamp, 10, 64)
 			if err == nil {
 				result := time.Unix(unixTime, 0).In(loc)
-				
+
 				// If there's a timezone specified, try to use it
 				if len(tzParts) > 1 && tzParts[1] != "" {
 					if tzLoc, found := tryParseTimezone(tzParts[1]); found {
 						result = result.In(tzLoc)
 					}
 				}
-				
+
 				return result, nil
 			}
 		}
 	}
 nextFormat:
-	
+
 	// Try European date format like "24.11.22"
 	if t, ok := parseEuropeanFormat(str, loc); ok {
 		return t, nil
@@ -388,7 +388,6 @@ func (p *Parser) skipWhitespace() {
 	}
 }
 
-
 // tryParseTimezone attempts to parse a timezone from the token stream
 // This handles both abbreviations (PST, EST) and full names (America/New_York, Europe/Paris)
 func (p *Parser) tryParseTimezone() bool {
@@ -466,43 +465,43 @@ func (p *Parser) tryParseStandardDate() (time.Time, bool, error) {
 	if p.position+4 >= len(p.tokens) {
 		return time.Time{}, false, nil
 	}
-	
+
 	// First make sure we have potential date format tokens
-	if p.tokens[p.position].Typ != TypeNumber || 
-	   p.tokens[p.position+2].Typ != TypeNumber || 
-	   p.tokens[p.position+4].Typ != TypeNumber {
+	if p.tokens[p.position].Typ != TypeNumber ||
+		p.tokens[p.position+2].Typ != TypeNumber ||
+		p.tokens[p.position+4].Typ != TypeNumber {
 		return time.Time{}, false, nil
 	}
-	
+
 	// Get the first three numbers (potential year, month, day in some order)
 	firstNum, err1 := strconv.Atoi(p.tokens[p.position].Val)
 	if err1 != nil {
 		return time.Time{}, false, fmt.Errorf("invalid number in date: %w", err1)
 	}
-	
+
 	secondNum, err2 := strconv.Atoi(p.tokens[p.position+2].Val)
 	if err2 != nil {
 		return time.Time{}, false, fmt.Errorf("invalid number in date: %w", err2)
 	}
-	
+
 	thirdNum, err3 := strconv.Atoi(p.tokens[p.position+4].Val)
 	if err3 != nil {
 		return time.Time{}, false, fmt.Errorf("invalid number in date: %w", err3)
 	}
-	
+
 	// Check the separators
 	if p.tokens[p.position+1].Typ != TypeOperator || p.tokens[p.position+3].Typ != TypeOperator {
 		return time.Time{}, false, nil
 	}
-	
+
 	separator := p.tokens[p.position+1].Val
 	if separator != p.tokens[p.position+3].Val {
 		return time.Time{}, false, nil
 	}
-	
+
 	// Determine the format based on the separators and numbers
 	var year, month, day int
-	
+
 	switch separator {
 	case "-":
 		// ISO format: YYYY-MM-DD or D-M-YYYY
@@ -537,15 +536,15 @@ func (p *Parser) tryParseStandardDate() (time.Time, bool, error) {
 	default:
 		return time.Time{}, false, nil
 	}
-	
+
 	// Validate date components using our utility function
 	if !IsValidDate(year, month, day) {
 		return time.Time{}, false, NewInvalidDateError(year, month, day)
 	}
-	
+
 	// Advance position past the parsed date
 	p.position += 5
-	
+
 	return time.Date(year, time.Month(month), day, 0, 0, 0, 0, p.loc), true, nil
 }
 
@@ -661,10 +660,10 @@ func isCompoundExpression(str string) bool {
 	// Normalize spaces around operators
 	spaceOperatorRe := strings.NewReplacer(" + ", "+", " - ", "-", "+ ", "+", "- ", "-")
 	normalizedStr := spaceOperatorRe.Replace(str)
-	
+
 	// Check if we have + or - in the middle of the string (not at the start)
 	return (strings.Contains(normalizedStr, "+") && !strings.HasPrefix(normalizedStr, "+")) ||
-		   (strings.Contains(normalizedStr, "-") && !strings.HasPrefix(normalizedStr, "-"))
+		(strings.Contains(normalizedStr, "-") && !strings.HasPrefix(normalizedStr, "-"))
 }
 
 // parseDateWithRelativeTime parses a date followed by a relative time adjustment
@@ -675,17 +674,17 @@ func parseDateWithRelativeTime(str string, now time.Time, loc *time.Location, op
 	if !ok {
 		return time.Time{}, false
 	}
-	
+
 	// Parse the date part
 	dateResult, err := StrToTime(datePart, append(opts, Rel(now))...)
 	if err != nil {
 		return time.Time{}, false
 	}
-	
+
 	// Handle special case for month end dates when subtracting months
 	if timePart == "-1 month" {
 		year, month, day := dateResult.Date()
-		
+
 		// Check if it's the last day of the month
 		if day == daysInMonth(year, month) {
 			// Create a date for the first day of the current month
@@ -694,7 +693,7 @@ func parseDateWithRelativeTime(str string, now time.Time, loc *time.Location, op
 			prevMonth := firstOfMonth.AddDate(0, -1, 0)
 			// Get the last day of the previous month
 			lastDay := daysInMonth(prevMonth.Year(), prevMonth.Month())
-			
+
 			// Create the final date with the last day of the previous month,
 			// preserving hour, minute, second from the original date
 			return time.Date(prevMonth.Year(), prevMonth.Month(), lastDay,
@@ -702,13 +701,13 @@ func parseDateWithRelativeTime(str string, now time.Time, loc *time.Location, op
 				dateResult.Nanosecond(), loc), true
 		}
 	}
-	
+
 	// Parse the time part using the date as reference
 	finalResult, err := StrToTime(timePart, append(opts, Rel(dateResult))...)
 	if err != nil {
 		return time.Time{}, false
 	}
-	
+
 	return finalResult, true
 }
 
@@ -718,11 +717,11 @@ func parseCompoundExpression(str string, now time.Time, opts []Option) (time.Tim
 	// Replace spaces around + and - with nothing to make parsing easier
 	spaceOperatorRe := strings.NewReplacer(" + ", "+", " - ", "-", "+ ", "+", "- ", "-")
 	normalizedStr := spaceOperatorRe.Replace(str)
-	
+
 	// Split the string at + and - operators
 	var parts []string
 	var operators []string
-	
+
 	// Find all + and - operators (not at the beginning)
 	currentPart := ""
 	for i := 0; i < len(normalizedStr); i++ {
@@ -734,30 +733,30 @@ func parseCompoundExpression(str string, now time.Time, opts []Option) (time.Tim
 			currentPart += string(normalizedStr[i])
 		}
 	}
-	
+
 	// Add the last part
 	if currentPart != "" {
 		parts = append(parts, currentPart)
 	}
-	
+
 	// Validate that we have at least one part and one operator
 	if len(parts) < 2 || len(operators) < 1 {
 		return time.Time{}, errors.New("invalid compound expression format")
 	}
-	
+
 	// Process the first part
 	result, err := StrToTime(parts[0], append(opts, Rel(now))...)
 	if err != nil {
 		return time.Time{}, err
 	}
-	
+
 	// Process each remaining part with its operator
 	for i := 0; i < len(operators); i++ {
 		// Check if we have a corresponding part for this operator
 		if i+1 >= len(parts) {
 			return time.Time{}, errors.New("missing operand after operator in compound expression")
 		}
-		
+
 		// Apply the operator to the part
 		opPart := operators[i] + parts[i+1]
 		nextResult, err := StrToTime(opPart, append(opts, Rel(result))...)
@@ -766,36 +765,8 @@ func parseCompoundExpression(str string, now time.Time, opts []Option) (time.Tim
 		}
 		result = nextResult
 	}
-	
-	return result, nil
-}
 
-// handleMonthEndDates handles the special case for month-end dates when adding/subtracting months
-func handleMonthEndDates(t time.Time, amount int, loc *time.Location) (time.Time, bool) {
-	year, month, day := t.Date()
-	
-	// Check if the current day is the last day of the month
-	if day == daysInMonth(year, month) {
-		// Add the months first
-		newDate := t.AddDate(0, amount, 0)
-		newYear, newMonth, _ := newDate.Date()
-		
-		// Then set the day to the last day of the target month
-		lastDay := daysInMonth(newYear, newMonth)
-		
-		return time.Date(
-			newYear, 
-			newMonth, 
-			lastDay, 
-			t.Hour(),
-			t.Minute(), 
-			t.Second(), 
-			t.Nanosecond(), 
-			loc,
-		), true
-	}
-	
-	return t, false
+	return result, nil
 }
 
 // applyTimeUnitOffset applies a time unit offset to the base time
@@ -808,10 +779,6 @@ func (p *Parser) applyTimeUnitOffset(amount int, unitStr string) (time.Time, err
 	case UnitWeek:
 		return p.result.AddDate(0, 0, amount*7), nil
 	case UnitMonth:
-		// Special handling for end-of-month dates
-		if adjustedTime, handled := handleMonthEndDates(p.result, amount, p.loc); handled {
-			return adjustedTime, nil
-		}
 		return p.result.AddDate(0, amount, 0), nil
 	case UnitYear:
 		return p.result.AddDate(amount, 0, 0), nil
@@ -1121,8 +1088,6 @@ func (p *Parser) tryParseMonthNameFormat() (time.Time, bool, error) {
 	return time.Date(year, month, day, hour, minute, second, 0, p.loc), true, nil
 }
 
-
-
 // getMonthByName converts a month name to its number
 func getMonthByName(name string) (time.Month, bool) {
 	monthNames := map[string]time.Month{
@@ -1192,7 +1157,7 @@ func normalizeTimeUnit(unit string) string {
 		"day":   UnitDay,
 		"days":  UnitDay,
 		"days.": UnitDay,
-		
+
 		// Week variations
 		"w":     UnitWeek,
 		"wk":    UnitWeek,
@@ -1200,7 +1165,7 @@ func normalizeTimeUnit(unit string) string {
 		"wks.":  UnitWeek,
 		"week":  UnitWeek,
 		"weeks": UnitWeek,
-		
+
 		// Month variations
 		"m":      UnitMonth,
 		"mon":    UnitMonth,
@@ -1208,7 +1173,7 @@ func normalizeTimeUnit(unit string) string {
 		"mons.":  UnitMonth,
 		"month":  UnitMonth,
 		"months": UnitMonth,
-		
+
 		// Year variations
 		"y":     UnitYear,
 		"yr":    UnitYear,
@@ -1216,7 +1181,7 @@ func normalizeTimeUnit(unit string) string {
 		"yrs.":  UnitYear,
 		"year":  UnitYear,
 		"years": UnitYear,
-		
+
 		// Hour variations
 		"h":      UnitHour,
 		"hr":     UnitHour,
@@ -1225,14 +1190,14 @@ func normalizeTimeUnit(unit string) string {
 		"hour":   UnitHour,
 		"hours":  UnitHour,
 		"hourss": UnitHour,
-		
+
 		// Minute variations
 		"min":     UnitMinute,
 		"mins":    UnitMinute,
 		"mins.":   UnitMinute,
 		"minute":  UnitMinute,
 		"minutes": UnitMinute,
-		
+
 		// Second variations
 		"sec":     UnitSecond,
 		"secs":    UnitSecond,
@@ -1240,18 +1205,18 @@ func normalizeTimeUnit(unit string) string {
 		"second":  UnitSecond,
 		"seconds": UnitSecond,
 	}
-	
+
 	// Try exact match first
 	if canonical, found := unitMap[strings.ToLower(unit)]; found {
 		return canonical
 	}
-	
+
 	// Remove trailing 's' if present for plurals not in the map
 	trimmed := strings.TrimSuffix(strings.ToLower(unit), "s")
 	if canonical, found := unitMap[trimmed]; found {
 		return canonical
 	}
-	
+
 	// Handle prefixes for longer variations
 	lowerUnit := strings.ToLower(unit)
 	if strings.HasPrefix(lowerUnit, "day") {
@@ -1269,7 +1234,7 @@ func normalizeTimeUnit(unit string) string {
 	} else if strings.HasPrefix(lowerUnit, "sec") {
 		return UnitSecond
 	}
-	
+
 	// If we couldn't normalize, return the original unit
 	return unit
 }
