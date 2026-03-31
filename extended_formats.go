@@ -805,6 +805,95 @@ func parseDateWithTZ(str string, loc *time.Location) (time.Time, bool) {
 	return time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, tzLoc), true
 }
 
+// parseFrontBackOf parses Scottish time expressions:
+// "front of 7" = 6:45 (15 minutes before the hour)
+// "back of 7" = 7:15 (15 minutes after the hour)
+// Also supports AM/PM: "front of 12pm" = 11:45, "back of 3am" = 3:15
+func parseFrontBackOf(str string, now time.Time, loc *time.Location) (time.Time, bool) {
+	lower := strings.ToLower(strings.TrimSpace(str))
+
+	var isFront bool
+	var rest string
+
+	if strings.HasPrefix(lower, "front of ") {
+		isFront = true
+		rest = strings.TrimSpace(lower[9:])
+	} else if strings.HasPrefix(lower, "back of ") {
+		isFront = false
+		rest = strings.TrimSpace(lower[8:])
+	} else {
+		return time.Time{}, false
+	}
+
+	// Parse the hour, possibly with am/pm suffix
+	ampm := ""
+	if strings.HasSuffix(rest, "am") {
+		ampm = "am"
+		rest = strings.TrimSpace(rest[:len(rest)-2])
+	} else if strings.HasSuffix(rest, "pm") {
+		ampm = "pm"
+		rest = strings.TrimSpace(rest[:len(rest)-2])
+	}
+
+	hour, err := strconv.Atoi(rest)
+	if err != nil || hour < 0 || hour > 24 {
+		return time.Time{}, false
+	}
+
+	if ampm != "" {
+		hour = applyAMPM(hour, ampm)
+	}
+
+	year, month, day := now.Date()
+	if isFront {
+		// "front of N" = (N-1):45
+		return time.Date(year, month, day, hour-1, 45, 0, 0, loc), true
+	}
+	// "back of N" = N:15
+	return time.Date(year, month, day, hour, 15, 0, 0, loc), true
+}
+
+// romanNumeralMonths maps Roman numerals to month numbers
+var romanNumeralMonths = map[string]time.Month{
+	"i": time.January, "ii": time.February, "iii": time.March,
+	"iv": time.April, "v": time.May, "vi": time.June,
+	"vii": time.July, "viii": time.August, "ix": time.September,
+	"x": time.October, "xi": time.November, "xii": time.December,
+}
+
+// parseRomanNumeralDate parses dates with Roman numeral months: "20 VI. 2005", "1 III 2010"
+func parseRomanNumeralDate(str string, loc *time.Location) (time.Time, bool) {
+	fields := strings.Fields(str)
+	if len(fields) < 3 {
+		return time.Time{}, false
+	}
+
+	// Parse day
+	day, err := strconv.Atoi(fields[0])
+	if err != nil || day < 1 || day > 31 {
+		return time.Time{}, false
+	}
+
+	// Parse Roman numeral month (strip trailing period)
+	monthStr := strings.ToLower(strings.TrimSuffix(fields[1], "."))
+	month, ok := romanNumeralMonths[monthStr]
+	if !ok {
+		return time.Time{}, false
+	}
+
+	// Parse year
+	year, err := strconv.Atoi(fields[2])
+	if err != nil {
+		return time.Time{}, false
+	}
+
+	if !IsValidDate(year, int(month), day) {
+		return time.Time{}, false
+	}
+
+	return time.Date(year, month, day, 0, 0, 0, 0, loc), true
+}
+
 // parseNumberedWeekday parses formats like "1 Monday December 2008", "second Monday December 2008"
 // It handles formats like "first Monday of December 2008" or "3rd Friday of January"
 func parseNumberedWeekday(str string, now time.Time, loc *time.Location) (time.Time, bool) {

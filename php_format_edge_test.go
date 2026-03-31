@@ -27,7 +27,7 @@ func TestPHPFormatEdgeCases(t *testing.T) {
 		{"17:00 2004-01-01", utcRef, time.Date(2004, 1, 1, 17, 0, 0, 0, time.UTC), ""},
 
 		// bug29150: roman numeral month
-		{"20 VI. 2005", utcRef, time.Date(2005, 6, 20, 0, 0, 0, 0, time.UTC), "roman numeral months not implemented"},
+		{"20 VI. 2005", utcRef, time.Date(2005, 6, 20, 0, 0, 0, 0, time.UTC), ""},
 
 		// bug33578: various month/day combos
 		{"11 Oct 2005", utcRef, time.Date(2005, 10, 11, 0, 0, 0, 0, time.UTC), ""},

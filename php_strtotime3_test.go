@@ -392,8 +392,7 @@ func TestPHPScottish(t *testing.T) {
 		t.Run(test.input, func(t *testing.T) {
 			result, err := StrToTime(test.input, InTZ(time.UTC))
 			if err != nil {
-				t.Skipf("Not yet supported: '%s': %v", test.input, err)
-				return
+				t.Fatalf("Failed to parse '%s': %v", test.input, err)
 			}
 
 			if result.Hour() != test.hour || result.Minute() != test.minute {

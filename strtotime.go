@@ -123,6 +123,16 @@ nextFormat:
 		return time.Date(year, month, day, 0, 0, 0, 0, loc), nil
 	}
 
+	// Try "front of" / "back of" Scottish time expressions
+	if t, ok := parseFrontBackOf(str, now, loc); ok {
+		return t, nil
+	}
+
+	// Try Roman numeral month date: "20 VI. 2005"
+	if t, ok := parseRomanNumeralDate(str, loc); ok {
+		return t, nil
+	}
+
 	// Try zero date special case
 	if t, ok := parseZeroDate(str, loc); ok {
 		return t, nil

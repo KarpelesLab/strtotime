@@ -72,9 +72,9 @@ func TestPHPBugRegressions(t *testing.T) {
 
 		// bug55397: front-of/back-of (Scottish time expressions)
 		{"bug55397-front", "front of 12pm", time.Date(2005, 12, 12, 10, 0, 0, 0, time.UTC),
-			time.Date(2005, 12, 12, 11, 45, 0, 0, time.UTC), "front of/back of not implemented"},
+			time.Date(2005, 12, 12, 11, 45, 0, 0, time.UTC), ""},
 		{"bug55397-back", "back of 12pm", time.Date(2005, 12, 12, 10, 0, 0, 0, time.UTC),
-			time.Date(2005, 12, 12, 12, 15, 0, 0, time.UTC), "front of/back of not implemented"},
+			time.Date(2005, 12, 12, 12, 15, 0, 0, time.UTC), ""},
 
 		// bug62896: 'of' keyword
 		{"bug62896", "first Monday of January 2013", time.Date(2013, 1, 1, 0, 0, 0, 0, time.UTC),
