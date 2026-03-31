@@ -79,7 +79,12 @@ func parseISO8601DateTime(str string, loc *time.Location) (time.Time, bool) {
 		// Skip optional space before timezone
 		tzStr := strings.TrimLeft(tzRest, " ")
 
-		if parsed, _, ok := parseNumericTimezoneOffset(tzStr); ok {
+		if parsed, consumed, ok := parseNumericTimezoneOffset(tzStr); ok {
+			// Ensure no trailing content after the timezone
+			remaining := strings.TrimSpace(tzStr[consumed:])
+			if len(remaining) > 0 {
+				return time.Time{}, false
+			}
 			tzLoc = parsed
 		} else if len(tzStr) > 0 {
 			// Try named timezone
@@ -91,6 +96,10 @@ func parseISO8601DateTime(str string, loc *time.Location) (time.Time, bool) {
 		}
 	}
 
+	// Handle 24:00:00 as midnight of next day
+	if hour == 24 {
+		return time.Date(year, time.Month(month), day+1, 0, minute, second, nanos, tzLoc), true
+	}
 	return time.Date(year, time.Month(month), day, hour, minute, second, nanos, tzLoc), true
 }
 
@@ -103,17 +112,10 @@ func parseISO8601Time(s string) (int, int, int, int, int, bool) {
 
 	var hour, minute, second, nanos, consumed int
 
-	if len(s) >= 8 && s[2] == ':' && s[5] == ':' && isAllDigits(s[:2]) && isAllDigits(s[3:5]) && isAllDigits(s[6:8]) {
-		// HH:MM:SS
-		hour, _ = strconv.Atoi(s[:2])
-		minute, _ = strconv.Atoi(s[3:5])
-		second, _ = strconv.Atoi(s[6:8])
-		consumed = 8
-	} else if len(s) >= 5 && s[2] == ':' && isAllDigits(s[:2]) && isAllDigits(s[3:5]) {
-		// HH:MM
-		hour, _ = strconv.Atoi(s[:2])
-		minute, _ = strconv.Atoi(s[3:5])
-		consumed = 5
+	// Try flexible H:M:S / HH:MM:SS parsing (supports single-digit components)
+	if flexH, flexM, flexS, flexN, ok := parseFlexTime(s); ok {
+		hour, minute, second = flexH, flexM, flexS
+		consumed = flexN
 	} else if len(s) >= 6 && isAllDigits(s[:6]) {
 		// HHMMSS
 		hour, _ = strconv.Atoi(s[:2])
@@ -129,7 +131,10 @@ func parseISO8601Time(s string) (int, int, int, int, int, bool) {
 		return 0, 0, 0, 0, 0, false
 	}
 
-	if !IsValidTime(hour, minute, second) {
+	// Allow 24:00:00 as a special case (midnight of next day, handled by caller)
+	if hour == 24 && minute == 0 && second == 0 {
+		// Valid, will be handled by caller
+	} else if !IsValidTime(hour, minute, second) {
 		return 0, 0, 0, 0, 0, false
 	}
 
@@ -154,6 +159,51 @@ func parseISO8601Time(s string) (int, int, int, int, int, bool) {
 	}
 
 	return hour, minute, second, nanos, consumed, true
+}
+
+// parseFlexTime parses time in flexible format H:M:S or H:M (supports 1 or 2 digit components)
+// Returns hour, minute, second, consumed, ok
+func parseFlexTime(s string) (int, int, int, int, bool) {
+	pos := 0
+	// Parse hour (1-2 digits)
+	hStart := pos
+	for pos < len(s) && s[pos] >= '0' && s[pos] <= '9' {
+		pos++
+	}
+	if pos == hStart || pos-hStart > 2 {
+		return 0, 0, 0, 0, false
+	}
+	if pos >= len(s) || s[pos] != ':' {
+		return 0, 0, 0, 0, false
+	}
+	hour, _ := strconv.Atoi(s[hStart:pos])
+	pos++ // skip ':'
+
+	// Parse minute (1-2 digits)
+	mStart := pos
+	for pos < len(s) && s[pos] >= '0' && s[pos] <= '9' {
+		pos++
+	}
+	if pos == mStart || pos-mStart > 2 {
+		return 0, 0, 0, 0, false
+	}
+	minute, _ := strconv.Atoi(s[mStart:pos])
+
+	second := 0
+	// Optional seconds
+	if pos < len(s) && s[pos] == ':' {
+		pos++ // skip ':'
+		sStart := pos
+		for pos < len(s) && s[pos] >= '0' && s[pos] <= '9' {
+			pos++
+		}
+		if pos == sStart || pos-sStart > 2 {
+			return 0, 0, 0, 0, false
+		}
+		second, _ = strconv.Atoi(s[sStart:pos])
+	}
+
+	return hour, minute, second, pos, true
 }
 
 // parseNumericTimezoneOffset parses numeric timezone offsets:
@@ -211,6 +261,15 @@ func parseNumericTimezoneOffset(s string) (*time.Location, int, bool) {
 				offset := sign * h * 3600
 				return time.FixedZone("", offset), 3, true
 			}
+		}
+	}
+
+	// Try flexible +H:M or -H:M format (single-digit components)
+	if len(rest) >= 1 && rest[0] >= '0' && rest[0] <= '9' {
+		h, m, _, consumed, ok := parseFlexTime(rest)
+		if ok && h <= 14 && m <= 59 {
+			offset := sign * (h*3600 + m*60)
+			return time.FixedZone("", offset), consumed + 1, true
 		}
 	}
 

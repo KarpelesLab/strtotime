@@ -12,6 +12,7 @@ import (
 func StrToTime(str string, opts ...Option) (time.Time, error) {
 	var now time.Time
 	loc := time.Local // Default timezone to local
+	tzExplicit := false
 
 	for _, opt := range opts {
 		switch v := opt.(type) {
@@ -20,8 +21,14 @@ func StrToTime(str string, opts ...Option) (time.Time, error) {
 		case tzOption: // timezone
 			if v.loc != nil {
 				loc = v.loc
+				tzExplicit = true
 			}
 		}
+	}
+
+	// If a Rel time was provided but no explicit timezone, inherit from Rel
+	if !now.IsZero() && !tzExplicit {
+		loc = now.Location()
 	}
 
 	if now.IsZero() {
@@ -116,24 +123,40 @@ nextFormat:
 		return time.Date(year, month, day, 0, 0, 0, 0, loc), nil
 	}
 
+	// Try zero date special case
+	if t, ok := parseZeroDate(str, loc); ok {
+		return t, nil
+	}
+
+	// Try negative year format: -YYYY-MM-DD
+	if len(str) > 0 && str[0] == '-' {
+		if t, ok := parseNegativeYear(str, loc); ok {
+			return t, nil
+		}
+	}
+
 	// Try ISO 8601 formats (T separator, week dates, timezone offsets)
 	if t, ok := parseISO8601(str, loc); ok {
 		return t, nil
 	}
 
-	// Try to parse datetime format (YYYY-MM-DD HH:MM:SS)
+	// Try to parse datetime format (YYYY-MM-DD HH:MM:SS [TZ])
 	if t, ok := parseDateTimeFormat(str, loc); ok {
 		return t, nil
 	}
-	
+
 	// Try date with timezone format
 	if t, ok := parseWithTimezone(str, loc); ok {
 		return t, nil
 	}
 
-	// Try standard date formats - the string should be directly validated by these functions
-	// Certain irregular date formats like "2023-13" will just fall through
+	// Try standard date formats
 	if t, ok := parseISOFormat(str, loc); ok {
+		return t, nil
+	}
+
+	// Try YYYY-MM (year-month only)
+	if t, ok := parseYearMonthFormat(str, loc); ok {
 		return t, nil
 	}
 
@@ -144,23 +167,69 @@ nextFormat:
 	if t, ok := parseUSFormat(str, loc); ok {
 		return t, nil
 	}
-	
+
+	// Try US date with time (MM/DD/YYYY H:MM AM)
+	if t, ok := parseUSDateWithTime(str, loc); ok {
+		return t, nil
+	}
+
 	// Try extended date formats
 	if t, ok := parseCompactTimestamp(str, loc); ok {
 		return t, nil
 	}
-	
+
 	if t, ok := parseMonthNameFormat(str, loc); ok {
 		return t, nil
 	}
-	
+
 	if t, ok := parseHTTPLogFormat(str, loc); ok {
 		return t, nil
 	}
-	
+
+	// Try DD Mon YYYY format (RFC 2822, etc.)
+	if t, ok := parseDayMonthYear(str, loc); ok {
+		return t, nil
+	}
+
+	// Try month + year only: "Oct 2001", "2001 Oct"
+	if t, ok := parseMonthYearOnly(str, loc); ok {
+		return t, nil
+	}
+
+	// Try time before date: "19:30 Dec 17 2005"
+	if t, ok := parseTimeBeforeDate(str, loc); ok {
+		return t, nil
+	}
+
+	// Try "Month Day Time Year": "Dec 17 19:30 2005"
+	if t, ok := parseMonthDayTimeYear(str, loc); ok {
+		return t, nil
+	}
+
+	// Try "first/last day of YYYY-MM" or "first/last day of +1 month"
+	if t, ok := parseFirstLastDayOfDate(str, now, loc); ok {
+		return t, nil
+	}
+
+	// Try date + TZ: "2014-01-01 Asia/Tokyo"
+	if t, ok := parseDateWithTZ(str, loc); ok {
+		return t, nil
+	}
+
 	// Try parsing numbered weekday (e.g. "first Monday of December 2008")
 	if t, ok := parseNumberedWeekday(str, now, loc); ok {
 		return t, nil
+	}
+
+	// Try date + timezone + relative: "2004-10-31 EDT +1 hour"
+	if t, ok := parseDateTimeTZRelative(str, loc); ok {
+		return t, nil
+	}
+
+	// Check if this is a date followed by a relative time adjustment
+	// (must come before compound expression check)
+	if result, ok := parseDateWithRelativeTime(str, now, loc, opts); ok {
+		return result, nil
 	}
 
 	// Check if this is a compound expression (contains + or - in the middle)
@@ -168,8 +237,8 @@ nextFormat:
 		return parseCompoundExpression(str, now, opts)
 	}
 
-	// Check if this is a date followed by a relative time adjustment
-	if result, ok := parseDateWithRelativeTime(str, now, loc, opts); ok {
+	// Check if this is an ordinal date: "26th Nov"
+	if result, ok := parseOrdinalDate(str, now, loc); ok {
 		return result, nil
 	}
 
@@ -476,13 +545,14 @@ func (p *Parser) tryParseNextLastExpression() (time.Time, bool, error) {
 		return time.Time{}, false, nil
 	}
 
-	// Check for "next" or "last"
+	// Check for "next", "last", or "this"
 	token := p.tokens[p.position]
-	if token.Typ != TypeString || (token.Val != DirectionNext && token.Val != DirectionLast) {
+	if token.Typ != TypeString || (token.Val != DirectionNext && token.Val != DirectionLast && token.Val != "this") {
 		return time.Time{}, false, nil
 	}
 
 	isNext := token.Val == DirectionNext
+	isThis := token.Val == "this"
 	p.position++
 	p.skipWhitespace()
 
@@ -508,6 +578,9 @@ func (p *Parser) tryParseNextLastExpression() (time.Time, bool, error) {
 		if isNext {
 			// Next week = next Monday (always 1-7 days ahead)
 			return p.result.AddDate(0, 0, 7-daysSinceMonday), true, nil
+		} else if isThis {
+			// This week = this Monday
+			return p.result.AddDate(0, 0, -daysSinceMonday), true, nil
 		} else {
 			// Last week = previous week's Monday (always 7-13 days back)
 			return p.result.AddDate(0, 0, -(daysSinceMonday + 7)), true, nil
@@ -519,8 +592,14 @@ func (p *Parser) tryParseNextLastExpression() (time.Time, bool, error) {
 	if dayNum >= 0 {
 		// Handle day of week
 		currentDay := int(p.result.Weekday())
-		if isNext {
-			// Calculate days until the next occurrence
+		if isThis {
+			// "this X" = the X of the current week (can be past or future)
+			daysUntil := (dayNum - currentDay + 7) % 7
+			targetDay := p.result.AddDate(0, 0, daysUntil)
+			year, month, day := targetDay.Date()
+			return time.Date(year, month, day, 0, 0, 0, 0, p.loc), true, nil
+		} else if isNext {
+			// "next X" = the upcoming occurrence of that day
 			daysUntil := (dayNum - currentDay + 7) % 7
 			if daysUntil == 0 {
 				daysUntil = 7 // If today is the target day, go to next week
@@ -860,6 +939,10 @@ func (p *Parser) tryParseMonthOnlyFormat() (time.Time, bool, error) {
 		if nextToken.Typ == TypeNumber {
 			return time.Time{}, false, nil
 		}
+		// If next token is "." (period after abbreviation like "Dec."), defer to month name format
+		if nextToken.Typ == TypeOperator && nextToken.Val == "." {
+			return time.Time{}, false, nil
+		}
 		// Or if it's whitespace followed by a number, it might be "Month Day" with space
 		if nextToken.Typ == TypeWhitespace && p.position+2 < len(p.tokens) &&
 			p.tokens[p.position+2].Typ == TypeNumber {
@@ -911,6 +994,11 @@ func (p *Parser) tryParseMonthNameFormat() (time.Time, bool, error) {
 		return time.Time{}, false, nil
 	}
 	p.position++
+
+	// Skip optional period after month abbreviation (e.g., "Dec.")
+	if p.position < len(p.tokens) && p.tokens[p.position].Typ == TypeOperator && p.tokens[p.position].Val == "." {
+		p.position++
+	}
 	p.skipWhitespace()
 
 	// Check for day number
@@ -1053,7 +1141,13 @@ func getMonthByName(name string) (time.Month, bool) {
 		"dec":       time.December,
 	}
 
-	month, ok := monthNames[strings.ToLower(name)]
+	lower := strings.ToLower(name)
+	month, ok := monthNames[lower]
+	if ok {
+		return month, true
+	}
+	// Try without trailing period (e.g. "dec." → "dec")
+	month, ok = monthNames[strings.TrimSuffix(lower, ".")]
 	return month, ok
 }
 

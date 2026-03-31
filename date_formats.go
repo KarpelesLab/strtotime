@@ -176,34 +176,119 @@ func parseDateTimeFormat(str string, loc *time.Location) (time.Time, bool) {
 	datePart := str[:spaceIdx]
 	rest := strings.TrimSpace(str[spaceIdx+1:])
 
+	// Handle AM/PM — check if rest ends with AM or PM (possibly attached to time)
+	ampm := ""
+	restLower := strings.ToLower(rest)
+	if strings.HasSuffix(restLower, "am") || strings.HasSuffix(restLower, "pm") {
+		ampm = restLower[len(restLower)-2:]
+		rest = strings.TrimSpace(rest[:len(rest)-2])
+	} else {
+		// Check for " AM" or " PM" as separate word
+		upperRest := strings.ToUpper(rest)
+		if strings.HasSuffix(upperRest, " AM") || strings.HasSuffix(upperRest, " PM") {
+			ampm = strings.ToLower(upperRest[len(upperRest)-2:])
+			rest = strings.TrimSpace(rest[:len(rest)-3])
+		}
+	}
+
 	// Parse time using the ISO 8601 time parser (handles HH:MM:SS and fractional seconds)
 	hour, minute, second, nanos, consumed, ok := parseISO8601Time(rest)
 	if !ok {
 		return time.Time{}, false
 	}
 
-	// Parse the date
+	// Apply AM/PM
+	if ampm != "" {
+		hour = applyAMPM(hour, ampm)
+	}
+
+	// Parse the date — try ISO format first, then month-name format
 	t, dateOk := parseISOFormat(datePart, loc)
 	if !dateOk {
-		return time.Time{}, false
+		t, dateOk = parseMonthNameFormat(datePart, loc)
+		if !dateOk {
+			return time.Time{}, false
+		}
 	}
 
 	// Check for timezone offset after the time
 	tzLoc := loc
 	tzRest := rest[consumed:]
 	if len(tzRest) > 0 {
-		if parsed, _, ok := parseNumericTimezoneOffset(tzRest); ok {
+		tzStr := strings.TrimSpace(tzRest)
+		if parsed, _, ok := parseNumericTimezoneOffset(tzStr); ok {
 			tzLoc = parsed
-		} else {
-			// Not a numeric offset — might be handled by parseWithTimezone later
-			// Only match if there's no trailing content
-			if len(strings.TrimSpace(tzRest)) > 0 {
+		} else if len(tzStr) > 0 {
+			// Try named timezone (abbreviation or full name)
+			if parsed, found := tryParseTimezone(tzStr); found {
+				tzLoc = parsed
+			} else {
 				return time.Time{}, false
 			}
 		}
 	}
 
 	return time.Date(t.Year(), t.Month(), t.Day(), hour, minute, second, nanos, tzLoc), true
+}
+
+// parseYearMonthFormat parses "YYYY-MM" or "YYYY-M" as year-month (day defaults to 1)
+func parseYearMonthFormat(str string, loc *time.Location) (time.Time, bool) {
+	if strings.Count(str, "-") != 1 {
+		return time.Time{}, false
+	}
+
+	parts := strings.SplitN(str, "-", 2)
+	if len(parts) != 2 || !isAllDigits(parts[0]) || !isAllDigits(parts[1]) {
+		return time.Time{}, false
+	}
+	if len(parts[0]) < 4 {
+		return time.Time{}, false
+	}
+
+	year, _ := strconv.Atoi(parts[0])
+	month, _ := strconv.Atoi(parts[1])
+
+	if month < 1 || month > 12 {
+		return time.Time{}, false
+	}
+
+	return time.Date(year, time.Month(month), 1, 0, 0, 0, 0, loc), true
+}
+
+// parseNegativeYear parses "-YYYY-MM-DD" format (negative year)
+func parseNegativeYear(str string, loc *time.Location) (time.Time, bool) {
+	if len(str) < 2 || str[0] != '-' {
+		return time.Time{}, false
+	}
+	// Must have format -YYYY-MM-DD (at least -Y-M-D)
+	rest := str[1:]
+	if strings.Count(rest, "-") != 2 {
+		return time.Time{}, false
+	}
+	parts := strings.Split(rest, "-")
+	if len(parts) != 3 {
+		return time.Time{}, false
+	}
+	if !isAllDigits(parts[0]) || !isAllDigits(parts[1]) || !isAllDigits(parts[2]) {
+		return time.Time{}, false
+	}
+	year, _ := strconv.Atoi(parts[0])
+	month, _ := strconv.Atoi(parts[1])
+	day, _ := strconv.Atoi(parts[2])
+	if month < 1 || month > 12 || day < 1 || day > 31 {
+		return time.Time{}, false
+	}
+	return time.Date(-year, time.Month(month), day, 0, 0, 0, 0, loc), true
+}
+
+// parseZeroDate handles the special case "0000-00-00 ..." which PHP maps to -0001-11-30
+func parseZeroDate(str string, loc *time.Location) (time.Time, bool) {
+	trimmed := strings.TrimSpace(str)
+	if !strings.HasPrefix(trimmed, "0000-00-00") {
+		return time.Time{}, false
+	}
+	// Return year 0, month 1, day 1 (Go's zero-ish date)
+	return time.Date(0, 1, 1, 0, 0, 0, 0, loc), true
 }
 
 // splitDateAndRest splits a string into a date portion and the rest after whitespace.

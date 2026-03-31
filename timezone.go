@@ -8,27 +8,27 @@ import (
 
 // Common timezone abbreviations
 var timezoneAbbreviations = map[string]*time.Location{
-	// North American time zones
-	"est":  mustLoadLocation("America/New_York"),    // Eastern Standard Time (UTC-5)
-	"edt":  mustLoadLocation("America/New_York"),    // Eastern Daylight Time (UTC-4)
-	"cst":  mustLoadLocation("America/Chicago"),     // Central Standard Time (UTC-6)
-	"cdt":  mustLoadLocation("America/Chicago"),     // Central Daylight Time (UTC-5)
-	"mst":  mustLoadLocation("America/Denver"),      // Mountain Standard Time (UTC-7)
-	"mdt":  mustLoadLocation("America/Denver"),      // Mountain Daylight Time (UTC-6)
-	"pst":  mustLoadLocation("America/Los_Angeles"), // Pacific Standard Time (UTC-8)
-	"pdt":  mustLoadLocation("America/Los_Angeles"), // Pacific Daylight Time (UTC-7)
-	"akst": mustLoadLocation("America/Anchorage"),   // Alaska Standard Time (UTC-9)
-	"akdt": mustLoadLocation("America/Anchorage"),   // Alaska Daylight Time (UTC-8)
-	"hst":  mustLoadLocation("Pacific/Honolulu"),    // Hawaii Standard Time (UTC-10)
+	// North American time zones — use fixed offsets so parsing preserves the stated timezone
+	"est":  time.FixedZone("EST", -5*3600),  // Eastern Standard Time (UTC-5)
+	"edt":  time.FixedZone("EDT", -4*3600),  // Eastern Daylight Time (UTC-4)
+	"cst":  time.FixedZone("CST", -6*3600),  // Central Standard Time (UTC-6)
+	"cdt":  time.FixedZone("CDT", -5*3600),  // Central Daylight Time (UTC-5)
+	"mst":  time.FixedZone("MST", -7*3600),  // Mountain Standard Time (UTC-7)
+	"mdt":  time.FixedZone("MDT", -6*3600),  // Mountain Daylight Time (UTC-6)
+	"pst":  time.FixedZone("PST", -8*3600),  // Pacific Standard Time (UTC-8)
+	"pdt":  time.FixedZone("PDT", -7*3600),  // Pacific Daylight Time (UTC-7)
+	"akst": time.FixedZone("AKST", -9*3600), // Alaska Standard Time (UTC-9)
+	"akdt": time.FixedZone("AKDT", -8*3600), // Alaska Daylight Time (UTC-8)
+	"hst":  time.FixedZone("HST", -10*3600), // Hawaii Standard Time (UTC-10)
 
 	// European time zones
-	"gmt":  mustLoadLocation("Europe/London"),   // Greenwich Mean Time (UTC+0)
-	"bst":  mustLoadLocation("Europe/London"),   // British Summer Time (UTC+1)
-	"iet":  mustLoadLocation("Europe/Dublin"),   // Irish Standard Time (UTC+1)
-	"cet":  mustLoadLocation("Europe/Paris"),    // Central European Time (UTC+1)
-	"cest": mustLoadLocation("Europe/Paris"),    // Central European Summer Time (UTC+2)
-	"eet":  mustLoadLocation("Europe/Helsinki"), // Eastern European Time (UTC+2)
-	"eest": mustLoadLocation("Europe/Helsinki"), // Eastern European Summer Time (UTC+3)
+	"gmt":  time.UTC,                          // Greenwich Mean Time (UTC+0)
+	"bst":  time.FixedZone("BST", 1*3600),    // British Summer Time (UTC+1)
+	"iet":  time.FixedZone("IET", 1*3600),    // Irish Standard Time (UTC+1)
+	"cet":  time.FixedZone("CET", 1*3600),    // Central European Time (UTC+1)
+	"cest": time.FixedZone("CEST", 2*3600),   // Central European Summer Time (UTC+2)
+	"eet":  time.FixedZone("EET", 2*3600),    // Eastern European Time (UTC+2)
+	"eest": time.FixedZone("EEST", 3*3600),   // Eastern European Summer Time (UTC+3)
 
 	// Australian time zones
 	"awst": mustLoadLocation("Australia/Perth"),    // Australian Western Standard Time (UTC+8)
@@ -44,6 +44,32 @@ var timezoneAbbreviations = map[string]*time.Location{
 	// Other common time zones
 	"utc": time.UTC, // Universal Coordinated Time
 	"z":   time.UTC, // Z (Zulu time) in ISO format
+
+	// Military single-letter timezone codes
+	"a": time.FixedZone("A", 1*3600),   // UTC+1
+	"b": time.FixedZone("B", 2*3600),   // UTC+2
+	"c": time.FixedZone("C", 3*3600),   // UTC+3
+	"d": time.FixedZone("D", 4*3600),   // UTC+4
+	"e": time.FixedZone("E", 5*3600),   // UTC+5
+	"f": time.FixedZone("F", 6*3600),   // UTC+6
+	"g": time.FixedZone("G", 7*3600),   // UTC+7
+	"h": time.FixedZone("H", 8*3600),   // UTC+8
+	"i": time.FixedZone("I", 9*3600),   // UTC+9
+	"k": time.FixedZone("K", 10*3600),  // UTC+10
+	"l": time.FixedZone("L", 11*3600),  // UTC+11
+	"m": time.FixedZone("M", 12*3600),  // UTC+12
+	"n": time.FixedZone("N", -1*3600),  // UTC-1
+	"o": time.FixedZone("O", -2*3600),  // UTC-2
+	"p": time.FixedZone("P", -3*3600),  // UTC-3
+	"q": time.FixedZone("Q", -4*3600),  // UTC-4
+	"r": time.FixedZone("R", -5*3600),  // UTC-5
+	"s": time.FixedZone("S", -6*3600),  // UTC-6
+	"t": time.FixedZone("T", -7*3600),  // UTC-7
+	"u": time.FixedZone("U", -8*3600),  // UTC-8
+	"v": time.FixedZone("V", -9*3600),  // UTC-9
+	"w": time.FixedZone("W", -10*3600), // UTC-10
+	"x": time.FixedZone("X", -11*3600), // UTC-11
+	"y": time.FixedZone("Y", -12*3600), // UTC-12
 }
 
 // Common full timezone names
@@ -105,8 +131,8 @@ func mustLoadLocation(name string) *time.Location {
 // tryParseTimezone attempts to parse a timezone from a string
 // It handles both abbreviations (PST, EST) and full names (America/New_York, Europe/Paris)
 func tryParseTimezone(tzString string) (*time.Location, bool) {
-	// Empty or too short timezone strings are invalid
-	if len(tzString) < 2 {
+	// Empty timezone strings are invalid
+	if len(tzString) == 0 {
 		return nil, false
 	}
 	

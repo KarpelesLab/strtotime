@@ -19,7 +19,7 @@ func TestTimezoneAbbreviations(t *testing.T) {
 		},
 		{
 			"January 1 2023 GMT",
-			"2023-01-01 00:00:00 +0000 GMT",
+			"2023-01-01 00:00:00 +0000 UTC",
 		},
 		{
 			"January 1 2023 UTC",

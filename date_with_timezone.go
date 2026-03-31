@@ -95,7 +95,8 @@ func parseISODateTimeWithTimezone(str string, loc *time.Location) (time.Time, bo
 		return time.Time{}, false
 	}
 
-	return t.In(tzLoc), true
+	// Create the time directly in the target timezone (preserving wall clock time)
+	return time.Date(t.Year(), t.Month(), t.Day(), hour, minute, second, 0, tzLoc), true
 }
 
 // parseTimeOnlyWithTimezone parses "HH:MM[:SS] timezone"

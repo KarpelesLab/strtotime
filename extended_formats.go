@@ -87,6 +87,22 @@ func parseMonthNameFormat(str string, loc *time.Location) (time.Time, bool) {
 		}
 	}
 
+	// Try "15-Jan-2006" format: digits-alpha-4digits (DD-Mon-YYYY)
+	if isAllDigits(parts[0]) && isAlpha(parts[1]) && len(parts[1]) >= 3 && isAllDigits(parts[2]) {
+		day, dayErr := strconv.Atoi(parts[0])
+		year, yearErr := strconv.Atoi(parts[2])
+
+		if dayErr == nil && yearErr == nil {
+			if year < 100 {
+				year = parseTwoDigitYear(year)
+			}
+			month, ok := getMonthByName(parts[1])
+			if ok && IsValidDate(year, int(month), day) {
+				return time.Date(year, month, day, 0, 0, 0, 0, loc), true
+			}
+		}
+	}
+
 	return time.Time{}, false
 }
 
@@ -184,6 +200,609 @@ func parseHTTPLogFormat(str string, loc *time.Location) (time.Time, bool) {
 
 	tz := time.FixedZone("", tzOffsetSeconds)
 	return time.Date(year, month, day, hour, minute, second, 0, tz), true
+}
+
+// stripOrdinalSuffix removes ordinal suffixes: "26th" → "26", "1st" → "1"
+func stripOrdinalSuffix(s string) string {
+	lower := strings.ToLower(s)
+	for _, suffix := range []string{"st", "nd", "rd", "th"} {
+		if strings.HasSuffix(lower, suffix) && len(s) > len(suffix) {
+			prefix := s[:len(s)-len(suffix)]
+			if isAllDigits(prefix) {
+				return prefix
+			}
+		}
+	}
+	return s
+}
+
+// stripMonthPeriod removes trailing period from month abbreviations: "dec." → "dec"
+func stripMonthPeriod(s string) string {
+	return strings.TrimSuffix(s, ".")
+}
+
+// getMonthByNameFlex tries to match a month name, handling trailing periods
+func getMonthByNameFlex(name string) (time.Month, bool) {
+	m, ok := getMonthByName(name)
+	if ok {
+		return m, true
+	}
+	return getMonthByName(stripMonthPeriod(name))
+}
+
+// parseDayMonthYear parses formats like "DD Mon YYYY", "DD-Mon-YYYY", "DDMonYYYY"
+// with optional time and timezone. Also handles day-of-week prefix and ordinal suffix.
+// Examples: "11 Oct 2005", "11-MAY-1988 12:00:00AM", "11Oct2005",
+//   "Sat 26th Nov 2005 18:18", "Thu, 20 Nov 2003 16:20:42 +0000"
+func parseDayMonthYear(str string, loc *time.Location) (time.Time, bool) {
+	s := str
+
+	// Skip leading day-of-week like "Sat " or "Thu, "
+	if len(s) >= 3 {
+		prefix := s[:3]
+		if getDayOfWeek(prefix) >= 0 {
+			s = s[3:]
+			// Skip optional comma and whitespace
+			s = strings.TrimLeft(s, ", ")
+		}
+	}
+
+	// Try to extract day, month, year from the remaining string
+	fields := strings.Fields(s)
+	if len(fields) < 2 {
+		// Try compact DDMonYYYY (no spaces)
+		return parseDayMonthYearCompact(s, loc)
+	}
+
+	idx := 0
+
+	// Parse day (may include ordinal suffix)
+	dayStr := stripOrdinalSuffix(fields[idx])
+	day, err := strconv.Atoi(dayStr)
+	if err != nil || day < 1 || day > 31 {
+		// Day might be fused with month: "11Oct" in "11Oct 2005"
+		return parseDayMonthYearCompact(s, loc)
+	}
+	idx++
+
+	// Parse month name
+	if idx >= len(fields) {
+		return time.Time{}, false
+	}
+	month, ok := getMonthByNameFlex(fields[idx])
+	if !ok {
+		return time.Time{}, false
+	}
+	idx++
+
+	// Parse year
+	if idx >= len(fields) {
+		return time.Time{}, false
+	}
+	year, err := strconv.Atoi(fields[idx])
+	if err != nil || year < 0 {
+		return time.Time{}, false
+	}
+	if year < 100 {
+		year = parseTwoDigitYear(year)
+	}
+	idx++
+
+	hour, minute, second, nanos := 0, 0, 0, 0
+
+	// Parse optional time
+	if idx < len(fields) {
+		timeStr := fields[idx]
+		if strings.Contains(timeStr, ":") {
+			h, m, sec, consumed, ok := parseFlexTime(timeStr)
+			if ok {
+				hour, minute, second = h, m, sec
+				idx++
+				// Check for AM/PM attached to time or as next field
+				remaining := timeStr[consumed:]
+				if ampm := strings.ToLower(remaining); ampm == "am" || ampm == "pm" {
+					hour = applyAMPM(hour, ampm)
+				} else if idx < len(fields) {
+					ampm = strings.ToLower(fields[idx])
+					if ampm == "am" || ampm == "pm" {
+						hour = applyAMPM(hour, ampm)
+						idx++
+					}
+				}
+				// Handle fractional seconds
+				if consumed < len(timeStr) && timeStr[consumed] == '.' {
+					fracStart := consumed + 1
+					fracEnd := fracStart
+					for fracEnd < len(timeStr) && timeStr[fracEnd] >= '0' && timeStr[fracEnd] <= '9' {
+						fracEnd++
+					}
+					if fracEnd > fracStart {
+						fracStr := timeStr[fracStart:fracEnd]
+						for len(fracStr) < 9 {
+							fracStr += "0"
+						}
+						if len(fracStr) > 9 {
+							fracStr = fracStr[:9]
+						}
+						nanos, _ = strconv.Atoi(fracStr)
+					}
+				}
+			}
+		}
+	}
+
+	// Parse optional timezone
+	tzLoc := loc
+	if idx < len(fields) {
+		tzStr := strings.Join(fields[idx:], " ")
+		if parsed, _, ok := parseNumericTimezoneOffset(tzStr); ok {
+			tzLoc = parsed
+		} else if parsed, found := tryParseTimezone(tzStr); found {
+			tzLoc = parsed
+		}
+	}
+
+	if month > 0 && day > 0 {
+		return time.Date(year, month, day, hour, minute, second, nanos, tzLoc), true
+	}
+	return time.Time{}, false
+}
+
+// parseDayMonthYearCompact parses "DDMonYYYY" or "DDMon YYYY" with no space between day and month
+func parseDayMonthYearCompact(str string, loc *time.Location) (time.Time, bool) {
+	s := strings.TrimSpace(str)
+	if len(s) < 7 { // at least DMonYYYY
+		return time.Time{}, false
+	}
+
+	// Extract leading digits as day
+	dayEnd := 0
+	for dayEnd < len(s) && s[dayEnd] >= '0' && s[dayEnd] <= '9' {
+		dayEnd++
+	}
+	if dayEnd == 0 || dayEnd > 2 {
+		return time.Time{}, false
+	}
+	day, _ := strconv.Atoi(s[:dayEnd])
+
+	// Extract month name (3+ letters)
+	monthStart := dayEnd
+	monthEnd := monthStart
+	for monthEnd < len(s) && ((s[monthEnd] >= 'a' && s[monthEnd] <= 'z') || (s[monthEnd] >= 'A' && s[monthEnd] <= 'Z')) {
+		monthEnd++
+	}
+	if monthEnd-monthStart < 3 {
+		return time.Time{}, false
+	}
+	month, ok := getMonthByNameFlex(s[monthStart:monthEnd])
+	if !ok {
+		return time.Time{}, false
+	}
+
+	// Rest may have optional space then year, then optional time
+	rest := strings.TrimSpace(s[monthEnd:])
+	fields := strings.Fields(rest)
+	if len(fields) == 0 {
+		return time.Time{}, false
+	}
+
+	year, err := strconv.Atoi(fields[0])
+	if err != nil {
+		return time.Time{}, false
+	}
+	if year < 100 {
+		year = parseTwoDigitYear(year)
+	}
+
+	hour, minute, second, nanos := 0, 0, 0, 0
+	fidx := 1
+
+	// Parse optional time
+	if fidx < len(fields) && strings.Contains(fields[fidx], ":") {
+		h, m, sec, consumed, ok := parseFlexTime(fields[fidx])
+		if ok {
+			hour, minute, second = h, m, sec
+			// Check for AM/PM
+			remaining := fields[fidx][consumed:]
+			if ampm := strings.ToLower(remaining); ampm == "am" || ampm == "pm" {
+				hour = applyAMPM(hour, ampm)
+			} else if fidx+1 < len(fields) {
+				ampm = strings.ToLower(fields[fidx+1])
+				if ampm == "am" || ampm == "pm" {
+					hour = applyAMPM(hour, ampm)
+				}
+			}
+			// Handle fractional seconds
+			if consumed < len(fields[fidx]) && fields[fidx][consumed] == '.' {
+				fracStart := consumed + 1
+				fracEnd := fracStart
+				for fracEnd < len(fields[fidx]) && fields[fidx][fracEnd] >= '0' && fields[fidx][fracEnd] <= '9' {
+					fracEnd++
+				}
+				if fracEnd > fracStart {
+					fracStr := fields[fidx][fracStart:fracEnd]
+					for len(fracStr) < 9 {
+						fracStr += "0"
+					}
+					if len(fracStr) > 9 {
+						fracStr = fracStr[:9]
+					}
+					nanos, _ = strconv.Atoi(fracStr)
+				}
+			}
+		}
+	}
+
+	if day < 1 || day > 31 {
+		return time.Time{}, false
+	}
+
+	return time.Date(year, month, day, hour, minute, second, nanos, loc), true
+}
+
+// applyAMPM converts 12-hour time to 24-hour format
+func applyAMPM(hour int, ampm string) int {
+	if ampm == "am" {
+		if hour == 12 {
+			return 0
+		}
+		return hour
+	}
+	// pm
+	if hour == 12 {
+		return 12
+	}
+	return hour + 12
+}
+
+// parseMonthYearOnly parses "Oct 2001" or "2001 Oct" (month + year, day defaults to 1)
+func parseMonthYearOnly(str string, loc *time.Location) (time.Time, bool) {
+	fields := strings.Fields(str)
+	if len(fields) != 2 {
+		return time.Time{}, false
+	}
+
+	// Try "Month Year" (year must be >= 100 to avoid "April 4" being treated as year 4)
+	if month, ok := getMonthByNameFlex(fields[0]); ok {
+		year, err := strconv.Atoi(fields[1])
+		if err == nil && year >= 100 {
+			return time.Date(year, month, 1, 0, 0, 0, 0, loc), true
+		}
+	}
+
+	// Try "Year Month"
+	if year, err := strconv.Atoi(fields[0]); err == nil && year >= 100 {
+		if month, ok := getMonthByNameFlex(fields[1]); ok {
+			return time.Date(year, month, 1, 0, 0, 0, 0, loc), true
+		}
+	}
+
+	return time.Time{}, false
+}
+
+// parseTimeBeforeDate parses formats where time precedes the date:
+// "19:30 Dec 17 2005", "17:00 2004-01-01"
+func parseTimeBeforeDate(str string, loc *time.Location) (time.Time, bool) {
+	fields := strings.Fields(str)
+	if len(fields) < 2 {
+		return time.Time{}, false
+	}
+
+	// First field must look like a time (contains ':')
+	if !strings.Contains(fields[0], ":") {
+		return time.Time{}, false
+	}
+
+	hour, minute, second, _, ok := parseFlexTime(fields[0])
+	if !ok || !IsValidTime(hour, minute, second) {
+		return time.Time{}, false
+	}
+
+	// Try to parse the rest as a date
+	dateStr := strings.Join(fields[1:], " ")
+
+	// Try ISO date
+	if t, ok := parseISOFormat(dateStr, loc); ok {
+		return time.Date(t.Year(), t.Month(), t.Day(), hour, minute, second, 0, loc), true
+	}
+
+	// Try month name date: "Dec 17 2005"
+	dateFields := strings.Fields(dateStr)
+	if len(dateFields) >= 2 {
+		if month, ok := getMonthByNameFlex(dateFields[0]); ok {
+			dayStr := strings.TrimRight(dateFields[1], "stndrdth,")
+			day, err := strconv.Atoi(dayStr)
+			if err == nil && day >= 1 && day <= 31 {
+				year := time.Now().Year()
+				if len(dateFields) >= 3 {
+					if y, err := strconv.Atoi(dateFields[2]); err == nil {
+						year = y
+					}
+				}
+				return time.Date(year, month, day, hour, minute, second, 0, loc), true
+			}
+		}
+	}
+
+	return time.Time{}, false
+}
+
+// parseUSDateWithTime parses "MM/DD/YYYY H:MM AM" format (US date with 12-hour time)
+func parseUSDateWithTime(str string, loc *time.Location) (time.Time, bool) {
+	fields := strings.Fields(str)
+	if len(fields) < 2 {
+		return time.Time{}, false
+	}
+
+	// First field should be the date
+	t, ok := parseUSFormat(fields[0], loc)
+	if !ok {
+		return time.Time{}, false
+	}
+
+	// Parse time
+	if len(fields) >= 2 && strings.Contains(fields[1], ":") {
+		hour, minute, second, consumed, ok := parseFlexTime(fields[1])
+		if !ok {
+			return time.Time{}, false
+		}
+		// Check for AM/PM
+		remaining := fields[1][consumed:]
+		if ampm := strings.ToLower(remaining); ampm == "am" || ampm == "pm" {
+			hour = applyAMPM(hour, ampm)
+		} else if len(fields) >= 3 {
+			ampm = strings.ToLower(fields[2])
+			if ampm == "am" || ampm == "pm" {
+				hour = applyAMPM(hour, ampm)
+			}
+		}
+		return time.Date(t.Year(), t.Month(), t.Day(), hour, minute, second, 0, loc), true
+	}
+
+	return time.Time{}, false
+}
+
+// parseFirstLastDayOfDate parses "first day of YYYY-MM" and "last day of YYYY-MM" patterns
+func parseFirstLastDayOfDate(str string, now time.Time, loc *time.Location) (time.Time, bool) {
+	lower := strings.ToLower(strings.TrimSpace(str))
+
+	var isFirst, isLast bool
+	var rest string
+
+	if strings.HasPrefix(lower, "first day of ") {
+		isFirst = true
+		rest = strings.TrimSpace(lower[13:])
+	} else if strings.HasPrefix(lower, "last day of ") {
+		isLast = true
+		rest = strings.TrimSpace(lower[12:])
+	} else {
+		return time.Time{}, false
+	}
+
+	// Try to parse rest as a relative expression: "+1 month", "-2 months"
+	if len(rest) > 0 && (rest[0] == '+' || rest[0] == '-') {
+		fields := strings.Fields(rest)
+		if len(fields) == 2 {
+			amount, err := strconv.Atoi(fields[0])
+			if err == nil {
+				unit := normalizeTimeUnit(fields[1])
+				var refTime time.Time
+				switch unit {
+				case UnitMonth:
+					refTime = now.AddDate(0, amount, 0)
+				case UnitYear:
+					refTime = now.AddDate(amount, 0, 0)
+				default:
+					return time.Time{}, false
+				}
+				year, month, _ := refTime.Date()
+				if isFirst {
+					return time.Date(year, month, 1, now.Hour(), now.Minute(), now.Second(), 0, loc), true
+				}
+				return time.Date(year, month, daysInMonth(year, month), now.Hour(), now.Minute(), now.Second(), 0, loc), true
+			}
+		}
+	}
+
+	// Try to parse rest as YYYY-MM or YYYY-M
+	if t, ok := parseYearMonthFormat(rest, loc); ok {
+		year, month, _ := t.Date()
+		if isFirst {
+			return time.Date(year, month, 1, 0, 0, 0, 0, loc), true
+		}
+		if isLast {
+			return time.Date(year, month, daysInMonth(year, month), 0, 0, 0, 0, loc), true
+		}
+	}
+
+	// Try to parse rest as a month name with optional year
+	fields := strings.Fields(rest)
+	if len(fields) >= 1 {
+		if month, ok := getMonthByNameFlex(fields[0]); ok {
+			year := now.Year()
+			if len(fields) >= 2 {
+				if y, err := strconv.Atoi(fields[1]); err == nil {
+					year = y
+				}
+			}
+			if isFirst {
+				return time.Date(year, month, 1, 0, 0, 0, 0, loc), true
+			}
+			return time.Date(year, month, daysInMonth(year, month), 0, 0, 0, 0, loc), true
+		}
+	}
+
+	return time.Time{}, false
+}
+
+// parseOrdinalDate parses "26th Nov" or "December 4th, 2005" etc.
+// with optional time. Handles month name followed by ordinal day or ordinal day followed by month.
+func parseOrdinalDate(str string, now time.Time, loc *time.Location) (time.Time, bool) {
+	fields := strings.Fields(str)
+	if len(fields) < 2 {
+		return time.Time{}, false
+	}
+
+	// Try "DDth Mon [YYYY] [time]" format
+	dayStr := stripOrdinalSuffix(fields[0])
+	if day, err := strconv.Atoi(dayStr); err == nil && day >= 1 && day <= 31 {
+		if month, ok := getMonthByNameFlex(fields[1]); ok {
+			year := now.Year()
+			fidx := 2
+			if fidx < len(fields) {
+				if y, err := strconv.Atoi(fields[fidx]); err == nil {
+					year = y
+					fidx++
+				}
+			}
+			hour, minute, second := 0, 0, 0
+			if fidx < len(fields) && strings.Contains(fields[fidx], ":") {
+				h, m, s, _, ok := parseFlexTime(fields[fidx])
+				if ok {
+					hour, minute, second = h, m, s
+				}
+			}
+			return time.Date(year, month, day, hour, minute, second, 0, loc), true
+		}
+	}
+
+	return time.Time{}, false
+}
+
+// parseMonthDayTimeYear parses "Dec 17 19:30 2005" (month day time year)
+func parseMonthDayTimeYear(str string, loc *time.Location) (time.Time, bool) {
+	fields := strings.Fields(str)
+	if len(fields) != 4 {
+		return time.Time{}, false
+	}
+
+	month, ok := getMonthByNameFlex(fields[0])
+	if !ok {
+		return time.Time{}, false
+	}
+
+	dayStr := strings.TrimRight(fields[1], "stndrdth,")
+	day, err := strconv.Atoi(dayStr)
+	if err != nil || day < 1 || day > 31 {
+		return time.Time{}, false
+	}
+
+	// Third field should be time
+	if !strings.Contains(fields[2], ":") {
+		return time.Time{}, false
+	}
+	hour, minute, second, _, ok := parseFlexTime(fields[2])
+	if !ok {
+		return time.Time{}, false
+	}
+
+	// Fourth field should be year
+	year, err := strconv.Atoi(fields[3])
+	if err != nil {
+		return time.Time{}, false
+	}
+
+	return time.Date(year, month, day, hour, minute, second, 0, loc), true
+}
+
+// parseDateTimeTZRelative parses "YYYY-MM-DD TZ +N unit" or "YYYY-MM-DDThh:mm:ss+ZZZZ +N unit"
+// Handles date with timezone followed by relative time adjustment.
+func parseDateTimeTZRelative(str string, loc *time.Location) (time.Time, bool) {
+	// Look for patterns like "2004-10-31 EDT +1 hour" or "2008-07-01T22:35:17+0200 +7 days"
+	// Strategy: find the last +/- that starts a relative expression
+	lower := str
+
+	// Try to find a relative expression at the end: +N unit or -N unit
+	// Look backward for " +N " or " -N " pattern
+	for i := len(lower) - 1; i > 0; i-- {
+		if lower[i] == '+' || lower[i] == '-' {
+			// Check if preceded by space
+			if i > 0 && lower[i-1] == ' ' {
+				relPart := lower[i:]
+				datePart := strings.TrimSpace(lower[:i])
+
+				// Validate the relative part looks like "+N unit"
+				relFields := strings.Fields(relPart)
+				if len(relFields) != 2 {
+					continue
+				}
+				amount, err := strconv.Atoi(relFields[0])
+				if err != nil {
+					continue
+				}
+				unit := normalizeTimeUnit(relFields[1])
+				if unit == relFields[1] { // normalizeTimeUnit returns input if unrecognized
+					// Check more carefully
+					if unit != UnitDay && unit != UnitWeek && unit != UnitMonth && unit != UnitYear &&
+						unit != UnitHour && unit != UnitMinute && unit != UnitSecond {
+						continue
+					}
+				}
+
+				// Try to parse the date part
+				// Try ISO 8601
+				if t, ok := parseISO8601(datePart, loc); ok {
+					return applyRelativeUnit(t, amount, unit), true
+				}
+				// Try datetime with tz
+				if t, ok := parseDateTimeFormat(datePart, loc); ok {
+					return applyRelativeUnit(t, amount, unit), true
+				}
+				// Try date + time + tz: "2005-07-14 22:30:41 GMT"
+				if t, ok := parseISODateTimeWithTimezone(datePart, loc); ok {
+					return applyRelativeUnit(t, amount, unit), true
+				}
+				// Try date + tz (no time): "2004-10-31 EDT"
+				if t, ok := parseDateWithTZ(datePart, loc); ok {
+					return applyRelativeUnit(t, amount, unit), true
+				}
+				// Try plain date
+				if t, ok := parseISOFormat(datePart, loc); ok {
+					return applyRelativeUnit(t, amount, unit), true
+				}
+			}
+		}
+	}
+
+	return time.Time{}, false
+}
+
+// applyRelativeUnit applies a relative time offset
+func applyRelativeUnit(t time.Time, amount int, unit string) time.Time {
+	switch unit {
+	case UnitDay:
+		return t.AddDate(0, 0, amount)
+	case UnitWeek:
+		return t.AddDate(0, 0, amount*7)
+	case UnitMonth:
+		return t.AddDate(0, amount, 0)
+	case UnitYear:
+		return t.AddDate(amount, 0, 0)
+	case UnitHour:
+		return t.Add(time.Duration(amount) * time.Hour)
+	case UnitMinute:
+		return t.Add(time.Duration(amount) * time.Minute)
+	case UnitSecond:
+		return t.Add(time.Duration(amount) * time.Second)
+	}
+	return t
+}
+
+// parseDateWithTZ parses "YYYY-MM-DD TZname" (date + timezone without time)
+func parseDateWithTZ(str string, loc *time.Location) (time.Time, bool) {
+	fields := strings.Fields(str)
+	if len(fields) != 2 {
+		return time.Time{}, false
+	}
+	t, ok := parseISOFormat(fields[0], loc)
+	if !ok {
+		return time.Time{}, false
+	}
+	tzLoc, found := tryParseTimezone(fields[1])
+	if !found {
+		return time.Time{}, false
+	}
+	return time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, tzLoc), true
 }
 
 // parseNumberedWeekday parses formats like "1 Monday December 2008", "second Monday December 2008"
