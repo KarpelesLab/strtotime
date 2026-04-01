@@ -23,9 +23,9 @@ func TestPHPBugRegressions(t *testing.T) {
 			time.Date(2004, 2, 15, 0, 0, 0, 0, time.FixedZone("CST", -6*3600)), ""},
 
 		// bug32086: date arithmetic around DST
-		{"bug32086-nov1", "2004-11-01", time.Date(2004, 11, 1, 0, 0, 0, 0, time.UTC),
+		{"bug32086-nov1", "2004-11-01", time.Time{},
 			time.Date(2004, 11, 1, 0, 0, 0, 0, time.UTC), ""},
-		{"bug32086-nov1+1day", "2004-11-01 +1 day", time.Date(2004, 11, 1, 0, 0, 0, 0, time.UTC),
+		{"bug32086-nov1+1day", "2004-11-01 +1 day", time.Time{},
 			time.Date(2004, 11, 2, 0, 0, 0, 0, time.UTC), ""},
 
 		// bug32555: tomorrow with timezone
@@ -33,7 +33,7 @@ func TestPHPBugRegressions(t *testing.T) {
 			time.Date(2005, 3, 5, 0, 0, 0, 0, time.UTC), ""},
 
 		// bug40861: midnight handling
-		{"bug40861", "2000-01-01 12:00:00", time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC),
+		{"bug40861", "2000-01-01 12:00:00", time.Time{},
 			time.Date(2000, 1, 1, 12, 0, 0, 0, time.UTC), ""},
 
 		// bug44742: timezone in ISO format + relative
@@ -41,7 +41,7 @@ func TestPHPBugRegressions(t *testing.T) {
 			time.Date(2008, 7, 8, 22, 35, 17, 0, time.FixedZone("", 7200)), ""},
 
 		// bug45599: fractional seconds
-		{"bug45599-frac", "2008-07-01T22:35:17.02", time.Date(2008, 7, 1, 0, 0, 0, 0, time.UTC),
+		{"bug45599-frac", "2008-07-01T22:35:17.02", time.Time{},
 			time.Date(2008, 7, 1, 22, 35, 17, 20000000, time.UTC), ""},
 
 		// bug46108: negative timezone offset
@@ -49,25 +49,25 @@ func TestPHPBugRegressions(t *testing.T) {
 			time.Date(2008, 11, 20, 12, 0, 0, 0, time.FixedZone("", -5*3600)), ""},
 
 		// bug48678: negative year
-		{"bug48678", "-0001-06-28", time.Date(0, 1, 1, 0, 0, 0, 0, time.UTC),
+		{"bug48678", "-0001-06-28", time.Time{},
 			time.Date(-1, 6, 28, 0, 0, 0, 0, time.UTC), ""},
 
 		// bug52290: 24:00:00 as midnight next day
-		{"bug52290", "2010-03-06T24:00:00", time.Date(2010, 3, 6, 0, 0, 0, 0, time.UTC),
+		{"bug52290", "2010-03-06T24:00:00", time.Time{},
 			time.Date(2010, 3, 7, 0, 0, 0, 0, time.UTC), ""},
 
 		// bug52808: first/last day of
-		{"bug52808-first", "first day of 2010-01", time.Date(2010, 1, 1, 0, 0, 0, 0, time.UTC),
+		{"bug52808-first", "first day of 2010-01", time.Time{},
 			time.Date(2010, 1, 1, 0, 0, 0, 0, time.UTC), ""},
-		{"bug52808-last", "last day of 2010-01", time.Date(2010, 1, 1, 0, 0, 0, 0, time.UTC),
+		{"bug52808-last", "last day of 2010-01", time.Time{},
 			time.Date(2010, 1, 31, 0, 0, 0, 0, time.UTC), ""},
-		{"bug52808-last-feb", "last day of 2010-02", time.Date(2010, 2, 1, 0, 0, 0, 0, time.UTC),
+		{"bug52808-last-feb", "last day of 2010-02", time.Time{},
 			time.Date(2010, 2, 28, 0, 0, 0, 0, time.UTC), ""},
-		{"bug52808-last-feb-leap", "last day of 2012-02", time.Date(2012, 2, 1, 0, 0, 0, 0, time.UTC),
+		{"bug52808-last-feb-leap", "last day of 2012-02", time.Time{},
 			time.Date(2012, 2, 29, 0, 0, 0, 0, time.UTC), ""},
 
 		// bug53437: extra whitespace
-		{"bug53437", "  2010-10-06   12:53:10  ", time.Date(2010, 10, 6, 0, 0, 0, 0, time.UTC),
+		{"bug53437", "  2010-10-06   12:53:10  ", time.Time{},
 			time.Date(2010, 10, 6, 12, 53, 10, 0, time.UTC), ""},
 
 		// bug55397: front-of/back-of (Scottish time expressions)
@@ -77,11 +77,11 @@ func TestPHPBugRegressions(t *testing.T) {
 			time.Date(2005, 12, 12, 12, 15, 0, 0, time.UTC), ""},
 
 		// bug62896: 'of' keyword
-		{"bug62896", "first Monday of January 2013", time.Date(2013, 1, 1, 0, 0, 0, 0, time.UTC),
+		{"bug62896", "first Monday of January 2013", time.Time{},
 			time.Date(2013, 1, 7, 0, 0, 0, 0, time.UTC), ""},
 
 		// bug66721: microsecond parsing
-		{"bug66721", "2014-01-01 00:00:00.123456", time.Date(2014, 1, 1, 0, 0, 0, 0, time.UTC),
+		{"bug66721", "2014-01-01 00:00:00.123456", time.Time{},
 			time.Date(2014, 1, 1, 0, 0, 0, 123456000, time.UTC), ""},
 
 		// gh9763: this/next with day-of-week
@@ -98,7 +98,7 @@ func TestPHPBugRegressions(t *testing.T) {
 			if tt.skip != "" {
 				t.Skip(tt.skip)
 			}
-			var opts []Option
+			opts := []Option{InTZ(time.UTC)}
 			if !tt.base.IsZero() {
 				opts = append(opts, Rel(tt.base))
 			}
