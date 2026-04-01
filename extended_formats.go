@@ -907,30 +907,43 @@ func parseNumberedWeekday(str string, now time.Time, loc *time.Location) (time.T
 	var ordinal int
 
 	// Parse the ordinal (numeric or word)
+	// Also handle bare weekday name as first field: "Thursday Nov 2007" = first Thursday
 	if n, err := strconv.Atoi(fields[idx]); err == nil {
 		if n <= 0 || n > 5 {
 			return time.Time{}, false
 		}
 		ordinal = n
+		idx++
 	} else {
 		switch strings.ToLower(fields[idx]) {
 		case "first", "1st":
 			ordinal = 1
+			idx++
 		case "second", "2nd":
 			ordinal = 2
+			idx++
 		case "third", "3rd":
 			ordinal = 3
+			idx++
 		case "fourth", "4th":
 			ordinal = 4
+			idx++
 		case "fifth", "5th":
 			ordinal = 5
+			idx++
 		case "last":
 			ordinal = -1
+			idx++
 		default:
-			return time.Time{}, false
+			// Check if first field is a weekday name (implies ordinal=1)
+			if getDayOfWeek(fields[idx]) >= 0 {
+				ordinal = 1
+				// Don't advance idx — the weekday will be parsed next
+			} else {
+				return time.Time{}, false
+			}
 		}
 	}
-	idx++
 
 	// Parse the day of week or "day" keyword
 	if idx >= len(fields) {
