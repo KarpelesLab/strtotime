@@ -127,12 +127,20 @@ func parseISO8601Time(s string) (int, int, int, int, int, bool) {
 		hour, _ = strconv.Atoi(s[:2])
 		minute, _ = strconv.Atoi(s[2:4])
 		consumed = 4
+	} else if len(s) >= 2 && isAllDigits(s[:2]) && (len(s) == 2 || (s[2] < '0' || s[2] > '9')) {
+		// HH (hour only, no minute - e.g., "2012-02-02T10")
+		hour, _ = strconv.Atoi(s[:2])
+		consumed = 2
+	} else if len(s) >= 1 && s[0] >= '0' && s[0] <= '9' && (len(s) == 1 || (s[1] < '0' || s[1] > '9')) {
+		// H (single-digit hour)
+		hour, _ = strconv.Atoi(s[:1])
+		consumed = 1
 	} else {
 		return 0, 0, 0, 0, 0, false
 	}
 
-	// Allow 24:00:00 as a special case (midnight of next day, handled by caller)
-	if hour == 24 && minute == 0 && second == 0 {
+	// Allow hour 24 as a special case (wraps to next day, handled by caller)
+	if hour == 24 {
 		// Valid, will be handled by caller
 	} else if !IsValidTime(hour, minute, second) {
 		return 0, 0, 0, 0, 0, false

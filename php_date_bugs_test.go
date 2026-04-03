@@ -126,3 +126,64 @@ func mustLoadTz(name string) *time.Location {
 	}
 	return loc
 }
+
+// Additional test vectors from regressions when removing custom parser.
+// These formats must be handled by the strtotime library.
+func TestPHPDateFormatsRegression(t *testing.T) {
+	tests := []struct {
+		name    string
+		input   string
+		wantErr bool
+	}{
+		// Basic dates
+		{"basic-date", "2009-10-11", false},
+		{"basic-date2", "2009-01-01", false},
+		{"basic-date3", "2019-06-01", false},
+		{"basic-date4", "2014-09-20", false},
+		{"basic-date5", "2007-03-11", false},
+		{"basic-date6", "2015-02-01", false},
+		{"basic-date7", "2010-06-07", false},
+
+		// Date + time + timezone
+		{"datetime-gmt", "2005-07-14 22:30:41 GMT", false},
+		{"datetime-offset", "2007-03-11T00:00:00-0800", false},
+
+		// Bare timezone name as datetime (means "now" in that tz)
+		{"bare-tz-gmt", "GMT", false},
+
+		// Month name + ordinal + time + am/pm
+		{"month-ordinal-pm", "May 18th 5:05pm", false},
+		{"month-ordinal-am", "May 18th 5:05am", false},
+		{"month-ordinal-space-pm", "May 18th 5:05 pm", false},
+		{"month-ordinal-space-am", "May 18th 5:05 am", false},
+		{"month-ordinal-year-pm", "May 18th 2006 5:05pm", false},
+		{"month-ordinal-time", "May 18th 5:05", false},
+
+		// Negative year
+		{"negative-year", "-2007-06-28 00:00:00", false},
+
+		// Old year formats
+		{"old-year-month", "January 0099", false},
+		{"old-year-date", "January 1, 0099", false},
+		{"old-year-iso", "0099-01", false},
+
+		// RFC + relative
+		{"rfc-plus-relative", "Mon, 08 May 2006 13:06:44 -0400 +30 days", false},
+
+		// Military-style time
+		{"military-time-1", "04/04/04 2345", false},
+		{"military-time-2", "04/04/04 0045", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := StrToTime(tt.input)
+			if tt.wantErr && err == nil {
+				t.Errorf("StrToTime(%q) expected error, got nil", tt.input)
+			}
+			if !tt.wantErr && err != nil {
+				t.Errorf("StrToTime(%q) unexpected error: %v", tt.input, err)
+			}
+		})
+	}
+}

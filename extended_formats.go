@@ -27,31 +27,53 @@ func isAlpha(s string) bool {
 	return len(s) > 0
 }
 
-// parseCompactTimestamp parses timestamp formats like "19970523091528" (YYYYMMDDhhmmss)
+// parseCompactTimestamp parses compact timestamp formats:
+// - "19970523091528" (YYYYMMDDhhmmss, exactly 14 digits)
+// - "20050620091407 GMT" (14 digits + timezone)
+// - "20101212" (YYYYMMDD, exactly 8 digits)
 func parseCompactTimestamp(str string, loc *time.Location) (time.Time, bool) {
-	// Must be exactly 14 digits
-	if len(str) != 14 || !isAllDigits(str) {
+	// Split on space to handle optional timezone suffix
+	parts := strings.SplitN(str, " ", 2)
+	digits := parts[0]
+
+	// 8-digit YYYYMMDD format
+	if len(digits) == 8 && isAllDigits(digits) {
+		year, _ := strconv.Atoi(digits[0:4])
+		month, _ := strconv.Atoi(digits[4:6])
+		day, _ := strconv.Atoi(digits[6:8])
+		if month >= 1 && month <= 12 && day >= 1 && day <= 31 {
+			return time.Date(year, time.Month(month), day, 0, 0, 0, 0, loc), true
+		}
 		return time.Time{}, false
 	}
 
-	year, _ := strconv.Atoi(str[0:4])
-	month, _ := strconv.Atoi(str[4:6])
-	day, _ := strconv.Atoi(str[6:8])
-	hour, _ := strconv.Atoi(str[8:10])
-	minute, _ := strconv.Atoi(str[10:12])
-	second, _ := strconv.Atoi(str[12:14])
+	// 14-digit YYYYMMDDhhmmss format (with optional timezone)
+	if len(digits) != 14 || !isAllDigits(digits) {
+		return time.Time{}, false
+	}
 
-	// Validate date components
+	year, _ := strconv.Atoi(digits[0:4])
+	month, _ := strconv.Atoi(digits[4:6])
+	day, _ := strconv.Atoi(digits[6:8])
+	hour, _ := strconv.Atoi(digits[8:10])
+	minute, _ := strconv.Atoi(digits[10:12])
+	second, _ := strconv.Atoi(digits[12:14])
+
 	if month < 1 || month > 12 || day < 1 || day > 31 {
 		return time.Time{}, false
 	}
-
-	// Validate time components
 	if hour < 0 || hour > 23 || minute < 0 || minute > 59 || second < 0 || second > 59 {
 		return time.Time{}, false
 	}
 
-	return time.Date(year, time.Month(month), day, hour, minute, second, 0, loc), true
+	tzLoc := loc
+	if len(parts) > 1 && parts[1] != "" {
+		if parsed, found := tryParseTimezone(strings.TrimSpace(parts[1])); found {
+			tzLoc = parsed
+		}
+	}
+
+	return time.Date(year, time.Month(month), day, hour, minute, second, 0, tzLoc), true
 }
 
 // parseMonthNameFormat parses formats like "Jan-15-2006" or "2006-Jan-15"
@@ -349,10 +371,10 @@ func parseDayMonthYear(str string, loc *time.Location) (time.Time, bool) {
 	return time.Time{}, false
 }
 
-// parseDayMonthYearCompact parses "DDMonYYYY" or "DDMon YYYY" with no space between day and month
+// parseDayMonthYearCompact parses "DDMonYYYY", "DDMon YYYY", or "DDMon" (no year = current year)
 func parseDayMonthYearCompact(str string, loc *time.Location) (time.Time, bool) {
 	s := strings.TrimSpace(str)
-	if len(s) < 7 { // at least DMonYYYY
+	if len(s) < 4 { // at least DMon
 		return time.Time{}, false
 	}
 
@@ -382,6 +404,13 @@ func parseDayMonthYearCompact(str string, loc *time.Location) (time.Time, bool) 
 
 	// Rest may have optional space then year, then optional time
 	rest := strings.TrimSpace(s[monthEnd:])
+	if rest == "" {
+		// No year — default to current year (e.g., "11Oct")
+		if day < 1 || day > 31 {
+			return time.Time{}, false
+		}
+		return time.Date(time.Now().Year(), month, day, 0, 0, 0, 0, loc), true
+	}
 	fields := strings.Fields(rest)
 	if len(fields) == 0 {
 		return time.Time{}, false

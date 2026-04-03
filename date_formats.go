@@ -253,17 +253,26 @@ func parseYearMonthFormat(str string, loc *time.Location) (time.Time, bool) {
 	return time.Date(year, time.Month(month), 1, 0, 0, 0, 0, loc), true
 }
 
-// parseNegativeYear parses "-YYYY-MM-DD" format (negative year)
+// parseNegativeYear parses "-YYYY-MM-DD [HH:MM:SS [TZ]]" format (negative year)
 func parseNegativeYear(str string, loc *time.Location) (time.Time, bool) {
 	if len(str) < 2 || str[0] != '-' {
 		return time.Time{}, false
 	}
-	// Must have format -YYYY-MM-DD (at least -Y-M-D)
 	rest := str[1:]
-	if strings.Count(rest, "-") != 2 {
+
+	// Split off the date portion from optional time/tz
+	spaceIdx := strings.IndexByte(rest, ' ')
+	datePart := rest
+	timeTzPart := ""
+	if spaceIdx >= 0 {
+		datePart = rest[:spaceIdx]
+		timeTzPart = strings.TrimSpace(rest[spaceIdx+1:])
+	}
+
+	if strings.Count(datePart, "-") != 2 {
 		return time.Time{}, false
 	}
-	parts := strings.Split(rest, "-")
+	parts := strings.Split(datePart, "-")
 	if len(parts) != 3 {
 		return time.Time{}, false
 	}
@@ -276,7 +285,158 @@ func parseNegativeYear(str string, loc *time.Location) (time.Time, bool) {
 	if month < 1 || month > 12 || day < 1 || day > 31 {
 		return time.Time{}, false
 	}
-	return time.Date(-year, time.Month(month), day, 0, 0, 0, 0, loc), true
+
+	hour, minute, second, nanos := 0, 0, 0, 0
+	tzLoc := loc
+
+	if timeTzPart != "" {
+		hour, minute, second, nanos, tzLoc = parseTimeTzSuffix(timeTzPart, loc)
+	}
+
+	return time.Date(-year, time.Month(month), day, hour, minute, second, nanos, tzLoc), true
+}
+
+// parsePositiveYear parses "+YYYY...-MM-DD [HH:MM:SS [TZ]]" format (explicit positive large year)
+func parsePositiveYear(str string, loc *time.Location) (time.Time, bool) {
+	if len(str) < 2 || str[0] != '+' {
+		return time.Time{}, false
+	}
+	rest := str[1:]
+
+	spaceIdx := strings.IndexByte(rest, ' ')
+	datePart := rest
+	timeTzPart := ""
+	if spaceIdx >= 0 {
+		datePart = rest[:spaceIdx]
+		timeTzPart = strings.TrimSpace(rest[spaceIdx+1:])
+	}
+
+	if strings.Count(datePart, "-") != 2 {
+		return time.Time{}, false
+	}
+	parts := strings.Split(datePart, "-")
+	if len(parts) != 3 {
+		return time.Time{}, false
+	}
+	if !isAllDigits(parts[0]) || !isAllDigits(parts[1]) || !isAllDigits(parts[2]) {
+		return time.Time{}, false
+	}
+	// Must have a year with > 4 digits to differentiate from "+1 week" etc.
+	if len(parts[0]) < 5 {
+		return time.Time{}, false
+	}
+	year, _ := strconv.Atoi(parts[0])
+	month, _ := strconv.Atoi(parts[1])
+	day, _ := strconv.Atoi(parts[2])
+	if month < 1 || month > 12 || day < 1 || day > 31 {
+		return time.Time{}, false
+	}
+
+	hour, minute, second, nanos := 0, 0, 0, 0
+	tzLoc := loc
+
+	if timeTzPart != "" {
+		hour, minute, second, nanos, tzLoc = parseTimeTzSuffix(timeTzPart, loc)
+	}
+
+	return time.Date(year, time.Month(month), day, hour, minute, second, nanos, tzLoc), true
+}
+
+// parseTimeTzSuffix parses "HH:MM:SS[.frac] [TZ]" from the suffix of a date string
+func parseTimeTzSuffix(s string, loc *time.Location) (int, int, int, int, *time.Location) {
+	hour, minute, second, nanos := 0, 0, 0, 0
+	tzLoc := loc
+
+	h, m, sec, consumed, ok := parseFlexTime(s)
+	if !ok {
+		return hour, minute, second, nanos, tzLoc
+	}
+	hour, minute, second = h, m, sec
+	remaining := s[consumed:]
+
+	// Handle fractional seconds
+	if len(remaining) > 0 && remaining[0] == '.' {
+		fracStart := 1
+		fracEnd := fracStart
+		for fracEnd < len(remaining) && remaining[fracEnd] >= '0' && remaining[fracEnd] <= '9' {
+			fracEnd++
+		}
+		if fracEnd > fracStart {
+			fracStr := remaining[fracStart:fracEnd]
+			for len(fracStr) < 9 {
+				fracStr += "0"
+			}
+			if len(fracStr) > 9 {
+				fracStr = fracStr[:9]
+			}
+			nanos, _ = strconv.Atoi(fracStr)
+		}
+		remaining = remaining[fracEnd:]
+	}
+
+	remaining = strings.TrimSpace(remaining)
+	if remaining != "" {
+		if parsed, _, ok := parseNumericTimezoneOffset(remaining); ok {
+			tzLoc = parsed
+		} else if parsed, found := tryParseTimezone(remaining); found {
+			tzLoc = parsed
+		}
+	}
+
+	return hour, minute, second, nanos, tzLoc
+}
+
+// parseShortYearUSDateWithMilitaryTime parses "MM/DD/YY HHMM" format
+func parseShortYearUSDateWithMilitaryTime(str string, loc *time.Location) (time.Time, bool) {
+	parts := strings.SplitN(str, " ", 2)
+	if len(parts) != 2 {
+		return time.Time{}, false
+	}
+
+	datePart := parts[0]
+	timePart := strings.TrimSpace(parts[1])
+
+	// Date must have exactly 2 slashes
+	if strings.Count(datePart, "/") != 2 {
+		return time.Time{}, false
+	}
+
+	dateParts := strings.Split(datePart, "/")
+	if len(dateParts) != 3 {
+		return time.Time{}, false
+	}
+	for _, p := range dateParts {
+		if !isAllDigits(p) || len(p) == 0 {
+			return time.Time{}, false
+		}
+	}
+
+	// Only handle short year (1-2 digits)
+	if len(dateParts[2]) > 2 {
+		return time.Time{}, false
+	}
+
+	month, _ := strconv.Atoi(dateParts[0])
+	day, _ := strconv.Atoi(dateParts[1])
+	year, _ := strconv.Atoi(dateParts[2])
+	year = parseTwoDigitYear(year)
+
+	// Time must be exactly 4 digits (military time HHMM)
+	if len(timePart) != 4 || !isAllDigits(timePart) {
+		return time.Time{}, false
+	}
+
+	hour, _ := strconv.Atoi(timePart[:2])
+	minute, _ := strconv.Atoi(timePart[2:4])
+
+	if month < 1 || month > 12 || day < 1 || day > 31 {
+		return time.Time{}, false
+	}
+	if !IsValidTime(hour, minute, 0) {
+		return time.Time{}, false
+	}
+
+	return time.Date(year, time.Month(month), day, hour, minute, 0, 0, loc), true
 }
 
 // parseZeroDate handles the special case "0000-00-00 ..." which PHP maps to -0001-11-30

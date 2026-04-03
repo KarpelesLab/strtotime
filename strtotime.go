@@ -121,6 +121,12 @@ nextFormat:
 		yesterday := now.AddDate(0, 0, -1)
 		year, month, day := yesterday.Date()
 		return time.Date(year, month, day, 0, 0, 0, 0, loc), nil
+	case "midnight":
+		year, month, day := now.Date()
+		return time.Date(year, month, day, 0, 0, 0, 0, loc), nil
+	case "noon":
+		year, month, day := now.Date()
+		return time.Date(year, month, day, 12, 0, 0, 0, loc), nil
 	}
 
 	// Try "front of" / "back of" Scottish time expressions
@@ -138,9 +144,16 @@ nextFormat:
 		return t, nil
 	}
 
-	// Try negative year format: -YYYY-MM-DD
+	// Try negative year format: -YYYY-MM-DD [HH:MM:SS [TZ]]
 	if len(str) > 0 && str[0] == '-' {
 		if t, ok := parseNegativeYear(str, loc); ok {
+			return t, nil
+		}
+	}
+
+	// Try explicit positive year format: +YYYYY...-MM-DD [HH:MM:SS [TZ]]
+	if len(str) > 0 && str[0] == '+' {
+		if t, ok := parsePositiveYear(str, loc); ok {
 			return t, nil
 		}
 	}
@@ -180,6 +193,11 @@ nextFormat:
 
 	// Try US date with time (MM/DD/YYYY H:MM AM)
 	if t, ok := parseUSDateWithTime(str, loc); ok {
+		return t, nil
+	}
+
+	// Try short-year US date with military time (MM/DD/YY HHMM)
+	if t, ok := parseShortYearUSDateWithMilitaryTime(str, loc); ok {
 		return t, nil
 	}
 
@@ -252,6 +270,40 @@ nextFormat:
 		return result, nil
 	}
 
+	// Try stripping leading day-of-week name and reparsing the rest
+	// Handles: "Sun 2017-01-01", "Fri Aug 20 1993 23:59:59", etc.
+	{
+		stripped := false
+		var rest string
+		// Try full weekday names first (must check before 3-letter to avoid partial match)
+		for _, name := range []string{"sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"} {
+			if strings.HasPrefix(str, name) && len(str) > len(name) {
+				r := strings.TrimLeft(str[len(name):], ", ")
+				if len(r) > 0 {
+					rest = r
+					stripped = true
+					break
+				}
+			}
+		}
+		// Try 3-letter abbreviations
+		if !stripped && len(str) > 3 {
+			prefix := str[:3]
+			if getDayOfWeek(prefix) >= 0 {
+				r := strings.TrimLeft(str[3:], ", ")
+				if len(r) > 0 {
+					rest = r
+					stripped = true
+				}
+			}
+		}
+		if stripped {
+			if t, err := StrToTime(rest, opts...); err == nil {
+				return t, nil
+			}
+		}
+	}
+
 	// Tokenize the input string
 	tokens := Tokenize(str)
 
@@ -310,9 +362,31 @@ func (p *Parser) Parse() (time.Time, error) {
 			}
 		}
 
+		// Try "first/last day of this/next/last month/year"
+		if !parsed {
+			if t, ok, err := p.tryParseFirstLastDayOfExpression(); ok {
+				if err != nil {
+					return time.Time{}, err
+				}
+				p.result = t
+				parsed = true
+			}
+		}
+
 		// Try "next/last" expressions
 		if !parsed {
 			if t, ok, err := p.tryParseNextLastExpression(); ok {
+				if err != nil {
+					return time.Time{}, err
+				}
+				p.result = t
+				parsed = true
+			}
+		}
+
+		// Try bare weekday or "weekday next/last week [time]"
+		if !parsed {
+			if t, ok, err := p.tryParseBareWeekday(); ok {
 				if err != nil {
 					return time.Time{}, err
 				}
@@ -343,6 +417,50 @@ func (p *Parser) Parse() (time.Time, error) {
 			}
 		}
 
+		// Try "N weekday ago"
+		if !parsed {
+			if t, ok, err := p.tryParseWeekdayAgo(); ok {
+				if err != nil {
+					return time.Time{}, err
+				}
+				p.result = t
+				parsed = true
+			}
+		}
+
+		// Try ordinal word + unit (e.g., "eighth day")
+		if !parsed {
+			if t, ok, err := p.tryParseOrdinalRelativeTime(); ok {
+				if err != nil {
+					return time.Time{}, err
+				}
+				p.result = t
+				parsed = true
+			}
+		}
+
+		// Try standalone time expression "HH:MM[:SS]"
+		if !parsed {
+			if t, ok, err := p.tryParseTimeExpression(); ok {
+				if err != nil {
+					return time.Time{}, err
+				}
+				p.result = t
+				parsed = true
+			}
+		}
+
+		// Try time keywords "midnight" / "noon"
+		if !parsed {
+			if t, ok, err := p.tryParseTimeKeyword(); ok {
+				if err != nil {
+					return time.Time{}, err
+				}
+				p.result = t
+				parsed = true
+			}
+		}
+
 		// Try month only format (e.g., "January" or "Feb")
 		if !parsed {
 			if t, ok, err := p.tryParseMonthOnlyFormat(); ok {
@@ -357,6 +475,17 @@ func (p *Parser) Parse() (time.Time, error) {
 		// Try month name format
 		if !parsed {
 			if t, ok, err := p.tryParseMonthNameFormat(); ok {
+				if err != nil {
+					return time.Time{}, err
+				}
+				p.result = t
+				parsed = true
+			}
+		}
+
+		// Try bare 4-digit year (must be last number check)
+		if !parsed {
+			if t, ok, err := p.tryParseYearOnly(); ok {
 				if err != nil {
 					return time.Time{}, err
 				}
@@ -1060,7 +1189,7 @@ func (p *Parser) tryParseMonthNameFormat() (time.Time, bool, error) {
 				p.position++
 
 				// Check for seconds (optional)
-				if p.position+2 < len(p.tokens) &&
+				if p.position+1 < len(p.tokens) &&
 					p.tokens[p.position].Typ == TypeOperator && p.tokens[p.position].Val == ":" &&
 					p.tokens[p.position+1].Typ == TypeNumber {
 
@@ -1068,6 +1197,16 @@ func (p *Parser) tryParseMonthNameFormat() (time.Time, bool, error) {
 					secondVal, err := strconv.Atoi(p.tokens[p.position].Val)
 					if err == nil && secondVal >= 0 && secondVal <= 59 {
 						second = secondVal
+						p.position++
+					}
+				}
+
+				// Check for AM/PM (attached or space-separated)
+				p.skipWhitespace()
+				if p.position < len(p.tokens) && p.tokens[p.position].Typ == TypeString {
+					ampm := strings.ToLower(p.tokens[p.position].Val)
+					if ampm == "am" || ampm == "pm" {
+						hour = applyAMPM(hour, ampm)
 						p.position++
 					}
 				}
@@ -1237,4 +1376,412 @@ func normalizeTimeUnit(unit string) string {
 
 	// If we couldn't normalize, return the original unit
 	return unit
+}
+
+// tryParseBareWeekday handles:
+// - Bare weekday name: "tuesday" (next occurrence)
+// - Weekday + "next/last week" with optional time: "monday next week 13:00"
+// - Weekday + month [year]: "thursday nov 2007" (first occurrence in that month)
+func (p *Parser) tryParseBareWeekday() (time.Time, bool, error) {
+	if p.position >= len(p.tokens) {
+		return time.Time{}, false, nil
+	}
+
+	token := p.tokens[p.position]
+	if token.Typ != TypeString {
+		return time.Time{}, false, nil
+	}
+
+	dayNum := getDayOfWeek(token.Val)
+	if dayNum < 0 {
+		return time.Time{}, false, nil
+	}
+
+	p.position++
+	p.skipWhitespace()
+
+	// Check for "next/last week" after weekday
+	if p.position < len(p.tokens) && p.tokens[p.position].Typ == TypeString {
+		direction := p.tokens[p.position].Val
+		if direction == DirectionNext || direction == DirectionLast {
+			savedPos := p.position
+			p.position++
+			p.skipWhitespace()
+
+			if p.position < len(p.tokens) && p.tokens[p.position].Typ == TypeString &&
+				p.tokens[p.position].Val == UnitWeek {
+				p.position++
+
+				// Calculate: find the Monday of next/last week, then offset to target weekday
+				currentDay := int(p.result.Weekday())
+				daysSinceMonday := (currentDay + 6) % 7
+
+				var monday time.Time
+				if direction == DirectionNext {
+					monday = p.result.AddDate(0, 0, 7-daysSinceMonday)
+				} else {
+					monday = p.result.AddDate(0, 0, -(daysSinceMonday + 7))
+				}
+
+				// Offset from Monday to target weekday (Mon=0, Tue=1, ..., Sun=6)
+				targetOffset := (dayNum + 6) % 7
+				result := monday.AddDate(0, 0, targetOffset)
+
+				year, month, day := result.Date()
+				hour, minute, second := 0, 0, 0
+
+				// Check for optional time
+				p.skipWhitespace()
+				if p.position+2 < len(p.tokens) &&
+					p.tokens[p.position].Typ == TypeNumber &&
+					p.tokens[p.position+1].Typ == TypeOperator && p.tokens[p.position+1].Val == ":" &&
+					p.tokens[p.position+2].Typ == TypeNumber {
+
+					h, err := strconv.Atoi(p.tokens[p.position].Val)
+					if err == nil && h >= 0 && h <= 23 {
+						hour = h
+						p.position += 2 // Skip HH:
+						m, err := strconv.Atoi(p.tokens[p.position].Val)
+						if err == nil && m >= 0 && m <= 59 {
+							minute = m
+							p.position++
+						}
+					}
+				}
+
+				return time.Date(year, month, day, hour, minute, second, 0, p.loc), true, nil
+			}
+
+			// Not "next/last week", restore position
+			p.position = savedPos
+		}
+
+		// Check for weekday + month [year]: "thursday nov 2007"
+		if m, ok := getMonthByName(p.tokens[p.position].Val); ok {
+			p.position++
+			p.skipWhitespace()
+
+			year := p.result.Year()
+			if p.position < len(p.tokens) && p.tokens[p.position].Typ == TypeNumber {
+				if y, err := strconv.Atoi(p.tokens[p.position].Val); err == nil && y > 0 {
+					year = y
+					p.position++
+				}
+			}
+
+			// Find 1st occurrence of the weekday in that month
+			firstOfMonth := time.Date(year, m, 1, 0, 0, 0, 0, p.loc)
+			firstDayOfWeek := int(firstOfMonth.Weekday())
+			daysUntilFirst := (dayNum - firstDayOfWeek + 7) % 7
+			resultDay := 1 + daysUntilFirst
+
+			return time.Date(year, m, resultDay, 0, 0, 0, 0, p.loc), true, nil
+		}
+	}
+
+	// Bare weekday name - find next occurrence (PHP behavior)
+	currentDay := int(p.result.Weekday())
+	daysUntil := (dayNum - currentDay + 7) % 7
+	if daysUntil == 0 {
+		daysUntil = 7
+	}
+	nextDay := p.result.AddDate(0, 0, daysUntil)
+	year, month, day := nextDay.Date()
+
+	return time.Date(year, month, day, 0, 0, 0, 0, p.loc), true, nil
+}
+
+// tryParseFirstLastDayOfExpression handles "first/last day of this/next/last month/year"
+func (p *Parser) tryParseFirstLastDayOfExpression() (time.Time, bool, error) {
+	if p.position >= len(p.tokens) || p.tokens[p.position].Typ != TypeString {
+		return time.Time{}, false, nil
+	}
+
+	startPos := p.position
+	token := p.tokens[p.position]
+
+	var isFirst bool
+	switch token.Val {
+	case "first":
+		isFirst = true
+	case "last":
+		isFirst = false
+	default:
+		return time.Time{}, false, nil
+	}
+	p.position++
+	p.skipWhitespace()
+
+	// Must be followed by "day"
+	if p.position >= len(p.tokens) || p.tokens[p.position].Typ != TypeString || p.tokens[p.position].Val != "day" {
+		p.position = startPos
+		return time.Time{}, false, nil
+	}
+	p.position++
+	p.skipWhitespace()
+
+	// Must be followed by "of"
+	if p.position >= len(p.tokens) || p.tokens[p.position].Typ != TypeString || p.tokens[p.position].Val != "of" {
+		p.position = startPos
+		return time.Time{}, false, nil
+	}
+	p.position++
+	p.skipWhitespace()
+
+	// Must be followed by "this"/"next"/"last"
+	if p.position >= len(p.tokens) || p.tokens[p.position].Typ != TypeString {
+		p.position = startPos
+		return time.Time{}, false, nil
+	}
+
+	direction := p.tokens[p.position].Val
+	if direction != "this" && direction != DirectionNext && direction != DirectionLast {
+		p.position = startPos
+		return time.Time{}, false, nil
+	}
+	p.position++
+	p.skipWhitespace()
+
+	// Must be followed by "month" or "year"
+	if p.position >= len(p.tokens) || p.tokens[p.position].Typ != TypeString {
+		p.position = startPos
+		return time.Time{}, false, nil
+	}
+
+	unit := normalizeTimeUnit(p.tokens[p.position].Val)
+	p.position++
+
+	year := p.result.Year()
+	month := p.result.Month()
+
+	switch unit {
+	case UnitMonth:
+		if direction == DirectionNext {
+			ref := p.result.AddDate(0, 1, 0)
+			year, month, _ = ref.Date()
+		} else if direction == DirectionLast {
+			ref := p.result.AddDate(0, -1, 0)
+			year, month, _ = ref.Date()
+		}
+	case UnitYear:
+		if direction == DirectionNext {
+			year = p.result.Year() + 1
+			month = time.January
+		} else if direction == DirectionLast {
+			year = p.result.Year() - 1
+			month = time.December
+		}
+	default:
+		p.position = startPos
+		return time.Time{}, false, nil
+	}
+
+	var day int
+	if isFirst {
+		day = 1
+	} else {
+		day = daysInMonth(year, month)
+	}
+
+	return time.Date(year, month, day, p.result.Hour(), p.result.Minute(), p.result.Second(), 0, p.loc), true, nil
+}
+
+// tryParseTimeKeyword handles "midnight" and "noon" keywords in token stream
+func (p *Parser) tryParseTimeKeyword() (time.Time, bool, error) {
+	if p.position >= len(p.tokens) || p.tokens[p.position].Typ != TypeString {
+		return time.Time{}, false, nil
+	}
+
+	year, month, day := p.result.Date()
+	switch p.tokens[p.position].Val {
+	case "midnight":
+		p.position++
+		return time.Date(year, month, day, 0, 0, 0, 0, p.loc), true, nil
+	case "noon":
+		p.position++
+		return time.Date(year, month, day, 12, 0, 0, 0, p.loc), true, nil
+	default:
+		return time.Time{}, false, nil
+	}
+}
+
+// tryParseWeekdayAgo handles "N weekday ago" or "N weekdays ago"
+func (p *Parser) tryParseWeekdayAgo() (time.Time, bool, error) {
+	if p.position >= len(p.tokens) || p.tokens[p.position].Typ != TypeNumber {
+		return time.Time{}, false, nil
+	}
+
+	startPos := p.position
+	amount, err := strconv.Atoi(p.tokens[p.position].Val)
+	if err != nil || amount <= 0 {
+		return time.Time{}, false, nil
+	}
+	p.position++
+	p.skipWhitespace()
+
+	// Check for weekday name (singular or plural)
+	if p.position >= len(p.tokens) || p.tokens[p.position].Typ != TypeString {
+		p.position = startPos
+		return time.Time{}, false, nil
+	}
+
+	dayName := p.tokens[p.position].Val
+	singularName := strings.TrimSuffix(dayName, "s")
+	dayNum := getDayOfWeek(singularName)
+	if dayNum < 0 {
+		dayNum = getDayOfWeek(dayName)
+	}
+	if dayNum < 0 {
+		p.position = startPos
+		return time.Time{}, false, nil
+	}
+	p.position++
+	p.skipWhitespace()
+
+	// Check for "ago"
+	if p.position >= len(p.tokens) || p.tokens[p.position].Typ != TypeString || p.tokens[p.position].Val != "ago" {
+		p.position = startPos
+		return time.Time{}, false, nil
+	}
+	p.position++
+
+	// Go back N occurrences of that weekday
+	currentDay := int(p.result.Weekday())
+	daysSince := (currentDay - dayNum + 7) % 7
+	if daysSince == 0 {
+		daysSince = 7
+	}
+	totalDays := daysSince + (amount-1)*7
+	result := p.result.AddDate(0, 0, -totalDays)
+
+	// Preserve time from p.result
+	year, month, day := result.Date()
+	return time.Date(year, month, day, p.result.Hour(), p.result.Minute(), p.result.Second(), p.result.Nanosecond(), p.loc), true, nil
+}
+
+// tryParseTimeExpression handles standalone time like "HH:MM" or "HH:MM:SS"
+func (p *Parser) tryParseTimeExpression() (time.Time, bool, error) {
+	if p.position+2 >= len(p.tokens) {
+		return time.Time{}, false, nil
+	}
+
+	if p.tokens[p.position].Typ != TypeNumber ||
+		p.tokens[p.position+1].Typ != TypeOperator || p.tokens[p.position+1].Val != ":" ||
+		p.tokens[p.position+2].Typ != TypeNumber {
+		return time.Time{}, false, nil
+	}
+
+	hour, err := strconv.Atoi(p.tokens[p.position].Val)
+	if err != nil || hour < 0 || hour > 23 {
+		return time.Time{}, false, nil
+	}
+	p.position += 2 // Skip HH:
+
+	minute, err := strconv.Atoi(p.tokens[p.position].Val)
+	if err != nil || minute < 0 || minute > 59 {
+		return time.Time{}, false, nil
+	}
+	p.position++
+
+	second := 0
+	if p.position+1 < len(p.tokens) &&
+		p.tokens[p.position].Typ == TypeOperator && p.tokens[p.position].Val == ":" &&
+		p.tokens[p.position+1].Typ == TypeNumber {
+		p.position++ // Skip :
+		s, err := strconv.Atoi(p.tokens[p.position].Val)
+		if err == nil && s >= 0 && s <= 59 {
+			second = s
+			p.position++
+		}
+	}
+
+	year, month, day := p.result.Date()
+	return time.Date(year, month, day, hour, minute, second, 0, p.loc), true, nil
+}
+
+// tryParseOrdinalRelativeTime handles ordinal words as implicit relative time
+// e.g., "eighth day" = +8 days
+func (p *Parser) tryParseOrdinalRelativeTime() (time.Time, bool, error) {
+	if p.position >= len(p.tokens) || p.tokens[p.position].Typ != TypeString {
+		return time.Time{}, false, nil
+	}
+
+	startPos := p.position
+	amount := ordinalWordToNumber(p.tokens[p.position].Val)
+	if amount <= 0 {
+		return time.Time{}, false, nil
+	}
+	p.position++
+	p.skipWhitespace()
+
+	if p.position >= len(p.tokens) || p.tokens[p.position].Typ != TypeString {
+		p.position = startPos
+		return time.Time{}, false, nil
+	}
+
+	result, err := p.applyTimeUnitOffset(amount, p.tokens[p.position].Val)
+	if err != nil {
+		p.position = startPos
+		return time.Time{}, false, nil
+	}
+	p.position++
+	return result, true, nil
+}
+
+// tryParseYearOnly handles a bare 4-digit year number, setting the year on current result
+func (p *Parser) tryParseYearOnly() (time.Time, bool, error) {
+	if p.position >= len(p.tokens) || p.tokens[p.position].Typ != TypeNumber {
+		return time.Time{}, false, nil
+	}
+	val := p.tokens[p.position].Val
+	if len(val) != 4 {
+		return time.Time{}, false, nil
+	}
+	year, err := strconv.Atoi(val)
+	if err != nil || year < 1 {
+		return time.Time{}, false, nil
+	}
+
+	// Only treat as year if it's the last token (or followed only by whitespace)
+	nextPos := p.position + 1
+	for nextPos < len(p.tokens) && p.tokens[nextPos].Typ == TypeWhitespace {
+		nextPos++
+	}
+	if nextPos != len(p.tokens) {
+		return time.Time{}, false, nil
+	}
+
+	p.position++
+	return time.Date(year, p.result.Month(), p.result.Day(), p.result.Hour(), p.result.Minute(), p.result.Second(), p.result.Nanosecond(), p.loc), true, nil
+}
+
+// ordinalWordToNumber converts ordinal words to numbers
+func ordinalWordToNumber(word string) int {
+	switch strings.ToLower(word) {
+	case "first":
+		return 1
+	case "second":
+		return 2
+	case "third":
+		return 3
+	case "fourth":
+		return 4
+	case "fifth":
+		return 5
+	case "sixth":
+		return 6
+	case "seventh":
+		return 7
+	case "eighth":
+		return 8
+	case "ninth":
+		return 9
+	case "tenth":
+		return 10
+	case "eleventh":
+		return 11
+	case "twelfth":
+		return 12
+	}
+	return 0
 }
