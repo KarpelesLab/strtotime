@@ -4,6 +4,8 @@ import (
 	"strings"
 	"time"
 	"unicode"
+
+	"github.com/KarpelesLab/gotz"
 )
 
 // Common timezone abbreviations
@@ -30,16 +32,16 @@ var timezoneAbbreviations = map[string]*time.Location{
 	"eet":  time.FixedZone("EET", 2*3600),  // Eastern European Time (UTC+2)
 	"eest": time.FixedZone("EEST", 3*3600), // Eastern European Summer Time (UTC+3)
 
-	// Australian time zones
-	"awst": mustLoadLocation("Australia/Perth"),    // Australian Western Standard Time (UTC+8)
-	"acst": mustLoadLocation("Australia/Adelaide"), // Australian Central Standard Time (UTC+9:30)
-	"aest": mustLoadLocation("Australia/Sydney"),   // Australian Eastern Standard Time (UTC+10)
-	"aedt": mustLoadLocation("Australia/Sydney"),   // Australian Eastern Daylight Time (UTC+11)
+	// Australian time zones — use fixed offsets so abbreviations are preserved
+	"awst": time.FixedZone("AWST", 8*3600),       // Australian Western Standard Time (UTC+8)
+	"acst": time.FixedZone("ACST", 9*3600+30*60), // Australian Central Standard Time (UTC+9:30)
+	"aest": time.FixedZone("AEST", 10*3600),      // Australian Eastern Standard Time (UTC+10)
+	"aedt": time.FixedZone("AEDT", 11*3600),      // Australian Eastern Daylight Time (UTC+11)
 
-	// Asian time zones
-	"jst": mustLoadLocation("Asia/Tokyo"),    // Japan Standard Time (UTC+9)
-	"ct":  mustLoadLocation("Asia/Shanghai"), // China Standard Time (UTC+8)
-	"ist": mustLoadLocation("Asia/Kolkata"),  // Indian Standard Time (UTC+5:30)
+	// Asian time zones — use fixed offsets so abbreviations are preserved
+	"jst": time.FixedZone("JST", 9*3600),        // Japan Standard Time (UTC+9)
+	"ct":  time.FixedZone("CT", 8*3600),          // China Standard Time (UTC+8)
+	"ist": time.FixedZone("IST", 5*3600+30*60),  // Indian Standard Time (UTC+5:30)
 
 	// Other common time zones
 	"utc": time.UTC, // Universal Coordinated Time
@@ -118,14 +120,13 @@ var timezoneNames = map[string]string{
 	"zulu":                       "UTC",
 }
 
-// mustLoadLocation loads a location or panics, used for package initialization
-func mustLoadLocation(name string) *time.Location {
-	loc, err := time.LoadLocation(name)
+// loadLocation loads a timezone location using gotz embedded data.
+func loadLocation(name string) (*time.Location, error) {
+	z, err := gotz.Load(name)
 	if err != nil {
-		// Fall back to UTC rather than panicking
-		return time.UTC
+		return nil, err
 	}
-	return loc
+	return z.Location()
 }
 
 // tryParseTimezone attempts to parse a timezone from a string
@@ -147,12 +148,6 @@ func tryParseTimezone(tzString string) (*time.Location, bool) {
 	// Normalize to lowercase for case-insensitive matching
 	tzLower := strings.ToLower(tzString)
 
-	// Special handling for "America/New_York" which seems to have an issue in the tests
-	if tzLower == "america/new_york" {
-		loc, _ := time.LoadLocation("America/New_York")
-		return loc, true
-	}
-
 	// Strategy 1: Check common abbreviations first (most efficient)
 	if loc, found := timezoneAbbreviations[tzLower]; found {
 		return loc, true
@@ -160,14 +155,14 @@ func tryParseTimezone(tzString string) (*time.Location, bool) {
 
 	// Strategy 2: Check common full names
 	if tzName, found := timezoneNames[tzLower]; found {
-		loc, err := time.LoadLocation(tzName)
+		loc, err := loadLocation(tzName)
 		if err == nil {
 			return loc, true
 		}
 	}
 
 	// Strategy 3: Try direct load with original case
-	if loc, err := time.LoadLocation(tzString); err == nil {
+	if loc, err := loadLocation(tzString); err == nil {
 		return loc, true
 	}
 
@@ -184,7 +179,7 @@ func tryParseTimezone(tzString string) (*time.Location, bool) {
 		city := titleCase(strings.ToLower(parts[1]))
 		tzPropCase := region + "/" + city
 
-		if loc, err := time.LoadLocation(tzPropCase); err == nil {
+		if loc, err := loadLocation(tzPropCase); err == nil {
 			return loc, true
 		}
 	}
@@ -208,7 +203,7 @@ func tryParseTimezone(tzString string) (*time.Location, bool) {
 			city = strings.ReplaceAll(city, " ", "_")
 			tzPropCase := region + "/" + city
 
-			if loc, err := time.LoadLocation(tzPropCase); err == nil {
+			if loc, err := loadLocation(tzPropCase); err == nil {
 				return loc, true
 			}
 		}
