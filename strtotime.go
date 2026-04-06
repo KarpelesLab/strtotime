@@ -225,6 +225,12 @@ nextFormat:
 		return t, nil
 	}
 
+	// Try date + TZ: "2014-01-01 Asia/Tokyo"
+	// Must come before parseDateWithRelativeTime to avoid treating TZ as relative
+	if t, ok := parseDateWithTZ(str, loc); ok {
+		return t, nil
+	}
+
 	// Check if this is a date followed by a relative time adjustment
 	// (must come before compound expression check)
 	if result, ok := parseDateWithRelativeTime(str, now, loc, opts); ok {
@@ -253,11 +259,6 @@ nextFormat:
 
 	// Try "first/last day of YYYY-MM" or "first/last day of +1 month"
 	if t, ok := parseFirstLastDayOfDate(str, now, loc); ok {
-		return t, nil
-	}
-
-	// Try date + TZ: "2014-01-01 Asia/Tokyo"
-	if t, ok := parseDateWithTZ(str, loc); ok {
 		return t, nil
 	}
 
