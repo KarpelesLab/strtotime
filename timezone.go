@@ -120,9 +120,9 @@ var timezoneNames = map[string]string{
 	"zulu":                       "UTC",
 }
 
-// loadLocation loads a timezone location using gotz embedded data.
+// loadLocation loads a timezone location using gotz embedded data with case-insensitive matching.
 func loadLocation(name string) (*time.Location, error) {
-	z, err := gotz.Load(name)
+	z, err := gotz.LoadInsensitive(name)
 	if err != nil {
 		return nil, err
 	}

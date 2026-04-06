@@ -155,13 +155,10 @@ func TestPHPStrtotimeBasic(t *testing.T) {
 		{"1 Monday December 2008", time.Date(2008, 12, 1, 0, 0, 0, 0, time.UTC)},
 		{"2 Monday December 2008", time.Date(2008, 12, 8, 0, 0, 0, 0, time.UTC)},
 		{"3 Monday December 2008", time.Date(2008, 12, 15, 0, 0, 0, 0, time.UTC)},
-		// Word: "first Monday December 2008" = Monday after the first Monday
-		// Note: PHP's behavior differs here from our implementation.
-		// PHP: first=Dec 8, second=Dec 15, third=Dec 22
-		// Our implementation treats "first" and "1" equivalently.
-		{"first Monday December 2008", time.Date(2008, 12, 1, 0, 0, 0, 0, time.UTC)},
-		{"second Monday December 2008", time.Date(2008, 12, 8, 0, 0, 0, 0, time.UTC)},
-		{"third Monday December 2008", time.Date(2008, 12, 15, 0, 0, 0, 0, time.UTC)},
+		// Word ordinals without "of": PHP's "first" skips past the first occurrence
+		{"first Monday December 2008", time.Date(2008, 12, 8, 0, 0, 0, 0, time.UTC)},
+		{"second Monday December 2008", time.Date(2008, 12, 15, 0, 0, 0, 0, time.UTC)},
+		{"third Monday December 2008", time.Date(2008, 12, 22, 0, 0, 0, 0, time.UTC)},
 	}
 
 	for _, test := range tests {

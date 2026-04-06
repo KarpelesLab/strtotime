@@ -206,12 +206,29 @@ nextFormat:
 		return t, nil
 	}
 
+	// Try compact time formats (hhmmss, year+doy, t-prefix, dotted time)
+	if t, ok := parseCompactTimeFormats(str, now, loc); ok {
+		return t, nil
+	}
+
 	if t, ok := parseMonthNameFormat(str, loc); ok {
 		return t, nil
 	}
 
 	if t, ok := parseHTTPLogFormat(str, loc); ok {
 		return t, nil
+	}
+
+	// Try date + timezone + relative: "2004-10-31 EDT +1 hour", "Mon, 08 May 2006 13:06:44 -0400 +30 days"
+	// Must come before parseDayMonthYear to avoid swallowing the relative part
+	if t, ok := parseDateTimeTZRelative(str, loc); ok {
+		return t, nil
+	}
+
+	// Check if this is a date followed by a relative time adjustment
+	// (must come before compound expression check)
+	if result, ok := parseDateWithRelativeTime(str, now, loc, opts); ok {
+		return result, nil
 	}
 
 	// Try DD Mon YYYY format (RFC 2822, etc.)
@@ -247,17 +264,6 @@ nextFormat:
 	// Try parsing numbered weekday (e.g. "first Monday of December 2008")
 	if t, ok := parseNumberedWeekday(str, now, loc); ok {
 		return t, nil
-	}
-
-	// Try date + timezone + relative: "2004-10-31 EDT +1 hour"
-	if t, ok := parseDateTimeTZRelative(str, loc); ok {
-		return t, nil
-	}
-
-	// Check if this is a date followed by a relative time adjustment
-	// (must come before compound expression check)
-	if result, ok := parseDateWithRelativeTime(str, now, loc, opts); ok {
-		return result, nil
 	}
 
 	// Check if this is a compound expression (contains + or - in the middle)
@@ -298,7 +304,12 @@ nextFormat:
 			}
 		}
 		if stripped {
-			if t, err := StrToTime(rest, opts...); err == nil {
+			// Don't strip if rest is "next/last week" — the token parser
+			// handles "weekday next week [time]" as a unit (bug72719)
+			restTrimmed := strings.TrimSpace(rest)
+			if strings.HasPrefix(restTrimmed, "next ") || strings.HasPrefix(restTrimmed, "last ") {
+				// Let the token parser handle it
+			} else if t, err := StrToTime(rest, opts...); err == nil {
 				return t, nil
 			}
 		}
@@ -518,72 +529,79 @@ func (p *Parser) skipWhitespace() {
 }
 
 // tryParseTimezone attempts to parse a timezone from the token stream
-// This handles both abbreviations (PST, EST) and full names (America/New_York, Europe/Paris)
+// This handles abbreviations (PST, EST), slash-separated paths (America/New_York,
+// America/Argentina/Buenos_Aires), hyphenated names (America/Port-au-Prince),
+// and multi-word names (Eastern Time).
 func (p *Parser) tryParseTimezone() bool {
 	if p.position >= len(p.tokens) {
 		return false
 	}
 
-	// Save the current position in case we need to backtrack
+	// Must start with a string token
+	if p.tokens[p.position].Typ != TypeString {
+		return false
+	}
+
 	startPos := p.position
 
-	// Try parsing a single token timezone (like "EST", "GMT", etc.)
-	if p.position < len(p.tokens) && p.tokens[p.position].Typ == TypeString {
-		tzString := p.tokens[p.position].Val
-		if loc, found := tryParseTimezone(tzString); found {
-			p.loc = loc
-			p.tzFound = true
-			p.position++
+	// Try single token timezone first (EST, GMT, etc.)
+	tzString := p.tokens[p.position].Val
+	if loc, found := tryParseTimezone(tzString); found {
+		p.loc = loc
+		p.tzFound = true
+		p.position++
+		p.result = p.result.In(p.loc)
+		return true
+	}
 
-			// Update result to be in the new timezone
-			p.result = p.result.In(p.loc)
-			return true
+	// Try extending with / and - to build timezone paths like
+	// America/New_York, America/Argentina/Buenos_Aires, America/Port-au-Prince
+	var bestLoc *time.Location
+	bestPos := -1
+
+	pos := p.position + 1
+	for pos+1 < len(p.tokens) {
+		sep := p.tokens[pos]
+		if sep.Typ != TypeOperator || (sep.Val != "/" && sep.Val != "-") {
+			break
+		}
+		next := p.tokens[pos+1]
+		if next.Typ != TypeString {
+			break
+		}
+		tzString = tzString + sep.Val + next.Val
+		pos += 2
+
+		if loc, found := tryParseTimezone(tzString); found {
+			bestLoc = loc
+			bestPos = pos
 		}
 	}
 
-	// Try parsing a full timezone name with slashes (like "America/New_York")
-	// This could be multiple tokens like "Europe" "/" "Paris"
-	if p.position+2 < len(p.tokens) &&
-		p.tokens[p.position].Typ == TypeString &&
-		p.tokens[p.position+1].Typ == TypeOperator &&
-		p.tokens[p.position+1].Val == "/" &&
-		p.tokens[p.position+2].Typ == TypeString {
-
-		// Construct the timezone string with slash
-		tzString := p.tokens[p.position].Val + "/" + p.tokens[p.position+2].Val
-
-		if loc, found := tryParseTimezone(tzString); found {
-			p.loc = loc
-			p.tzFound = true
-			p.position += 3 // Skip all three tokens
-
-			// Update result to be in the new timezone
-			p.result = p.result.In(p.loc)
-			return true
-		}
+	if bestLoc != nil {
+		p.loc = bestLoc
+		p.tzFound = true
+		p.position = bestPos
+		p.result = p.result.In(p.loc)
+		return true
 	}
 
 	// Try parsing multi-word timezone names (like "Eastern Time")
 	if p.position+2 < len(p.tokens) &&
-		p.tokens[p.position].Typ == TypeString &&
 		p.tokens[p.position+1].Typ == TypeWhitespace &&
 		p.tokens[p.position+2].Typ == TypeString {
 
-		// Try to combine the tokens to form a full name
-		tzString := p.tokens[p.position].Val + " " + p.tokens[p.position+2].Val
+		tzString = p.tokens[p.position].Val + " " + p.tokens[p.position+2].Val
 
 		if loc, found := tryParseTimezone(tzString); found {
 			p.loc = loc
 			p.tzFound = true
-			p.position += 3 // Skip all three tokens
-
-			// Update result to be in the new timezone
+			p.position += 3
 			p.result = p.result.In(p.loc)
 			return true
 		}
 	}
 
-	// Restore the position if we couldn't parse a timezone
 	p.position = startPos
 	return false
 }
@@ -907,6 +925,8 @@ func (p *Parser) applyTimeUnitOffset(amount int, unitStr string) (time.Time, err
 		return p.result.AddDate(0, 0, amount), nil
 	case UnitWeek:
 		return p.result.AddDate(0, 0, amount*7), nil
+	case UnitWeekDay:
+		return addWeekdays(p.result, amount), nil
 	case UnitMonth:
 		return p.result.AddDate(0, amount, 0), nil
 	case UnitYear:
@@ -922,21 +942,55 @@ func (p *Parser) applyTimeUnitOffset(amount int, unitStr string) (time.Time, err
 	}
 }
 
+// addWeekdays adds N business days (Mon-Fri) to the given time.
+// PHP behavior: if starting on Sat/Sun, snap to Monday first (counts as 1 weekday),
+// then continue adding remaining weekdays.
+func addWeekdays(t time.Time, n int) time.Time {
+	if n == 0 {
+		return t
+	}
+
+	step := 1
+	if n < 0 {
+		step = -1
+		n = -n
+	}
+
+	result := t
+	for i := 0; i < n; i++ {
+		result = result.AddDate(0, 0, step)
+		// Skip weekends
+		for result.Weekday() == time.Saturday || result.Weekday() == time.Sunday {
+			result = result.AddDate(0, 0, step)
+		}
+	}
+	return result
+}
+
 // tryParseRelativeTime attempts to parse expressions like "+1 day" or "-3 weeks"
 func (p *Parser) tryParseRelativeTime() (time.Time, bool, error) {
 	if p.position >= len(p.tokens) {
 		return time.Time{}, false, nil
 	}
 
-	// Check for +/- operator
+	// Check for +/- operator (may be multi-character: "+-" means negative, "--" means positive)
+	// PHP rejects "++" but allows "--" and "+-"
 	token := p.tokens[p.position]
-	if token.Typ != TypeOperator || (token.Val != "+" && token.Val != "-") {
+	if token.Typ != TypeOperator {
 		return time.Time{}, false, nil
 	}
-
+	// Multi-character sign operators must contain at least one '-'
+	if len(token.Val) > 1 && !strings.Contains(token.Val, "-") {
+		return time.Time{}, false, nil
+	}
+	// Count minus signs to determine final sign
 	sign := 1
-	if token.Val == "-" {
-		sign = -1
+	for _, c := range token.Val {
+		if c == '-' {
+			sign = -sign
+		} else if c != '+' {
+			return time.Time{}, false, nil
+		}
 	}
 	p.position++
 
@@ -1305,6 +1359,10 @@ func normalizeTimeUnit(unit string) string {
 		"week":  UnitWeek,
 		"weeks": UnitWeek,
 
+		// Weekday (business day) variations
+		"weekday":  UnitWeekDay,
+		"weekdays": UnitWeekDay,
+
 		// Month variations
 		"m":      UnitMonth,
 		"mon":    UnitMonth,
@@ -1360,6 +1418,8 @@ func normalizeTimeUnit(unit string) string {
 	lowerUnit := strings.ToLower(unit)
 	if strings.HasPrefix(lowerUnit, "day") {
 		return UnitDay
+	} else if strings.HasPrefix(lowerUnit, "weekday") {
+		return UnitWeekDay
 	} else if strings.HasPrefix(lowerUnit, "week") {
 		return UnitWeek
 	} else if strings.HasPrefix(lowerUnit, "month") {

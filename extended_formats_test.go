@@ -121,7 +121,7 @@ func TestNumberedWeekday(t *testing.T) {
 		},
 		{
 			"first Monday December 2008",
-			time.Date(2008, 12, 1, 0, 0, 0, 0, time.UTC), // First Monday in December 2008
+			time.Date(2008, 12, 8, 0, 0, 0, 0, time.UTC), // PHP: "first" without "of" skips past first occurrence
 		},
 		{
 			"2 Monday December 2008",
@@ -129,11 +129,11 @@ func TestNumberedWeekday(t *testing.T) {
 		},
 		{
 			"second Monday December 2008",
-			time.Date(2008, 12, 8, 0, 0, 0, 0, time.UTC), // Second Monday in December 2008
+			time.Date(2008, 12, 15, 0, 0, 0, 0, time.UTC), // PHP: "second" without "of" = 2 weeks past first occurrence
 		},
 		{
 			"third Monday December 2008",
-			time.Date(2008, 12, 15, 0, 0, 0, 0, time.UTC), // Third Monday in December 2008
+			time.Date(2008, 12, 22, 0, 0, 0, 0, time.UTC), // PHP: "third" without "of" = 3 weeks past first occurrence
 		},
 		{
 			"third Monday of December 2008",
@@ -357,7 +357,7 @@ func TestStrToTimeWithExtendedFormats(t *testing.T) {
 		},
 		{
 			"second Monday December 2008",
-			time.Date(2008, 12, 8, 0, 0, 0, 0, time.UTC),
+			time.Date(2008, 12, 15, 0, 0, 0, 0, time.UTC),
 		},
 		{
 			"last Monday December 2008",

@@ -76,6 +76,91 @@ func parseCompactTimestamp(str string, loc *time.Location) (time.Time, bool) {
 	return time.Date(year, time.Month(month), day, hour, minute, second, 0, tzLoc), true
 }
 
+// parseCompactTimeFormats handles PHP-specific compact time/date formats:
+// - "022233": 6-digit hhmmss time-only
+// - "2006167": 7-digit year+day-of-year (pgydotd)
+// - "t0222": 't' prefix + hhmm time
+// - "22.49.12.42GMT": dotted time with optional fractional seconds and timezone
+func parseCompactTimeFormats(str string, now time.Time, loc *time.Location) (time.Time, bool) {
+	// "t" prefix + 4 digits = tHHMM time format
+	if len(str) >= 5 && str[0] == 't' && isAllDigits(str[1:5]) {
+		hour, _ := strconv.Atoi(str[1:3])
+		minute, _ := strconv.Atoi(str[3:5])
+		if IsValidTime(hour, minute, 0) {
+			y, m, d := now.Date()
+			return time.Date(y, m, d, hour, minute, 0, 0, loc), true
+		}
+	}
+
+	// Dotted time format: "HH.MM.SS[.frac][TZ]"
+	if len(str) >= 8 && str[2] == '.' && str[5] == '.' {
+		if isAllDigits(str[0:2]) && isAllDigits(str[3:5]) && str[6] >= '0' && str[6] <= '9' {
+			hour, _ := strconv.Atoi(str[0:2])
+			minute, _ := strconv.Atoi(str[3:5])
+			// Parse seconds (may be followed by .frac or tz)
+			pos := 6
+			for pos < len(str) && str[pos] >= '0' && str[pos] <= '9' {
+				pos++
+			}
+			second, _ := strconv.Atoi(str[6:pos])
+			if !IsValidTime(hour, minute, second) {
+				return time.Time{}, false
+			}
+			// Skip optional fractional part .NN
+			if pos < len(str) && str[pos] == '.' {
+				pos++
+				for pos < len(str) && str[pos] >= '0' && str[pos] <= '9' {
+					pos++
+				}
+			}
+			// Parse optional timezone suffix (no space)
+			tzLoc := loc
+			if pos < len(str) {
+				tzStr := str[pos:]
+				// Strip leading space if present
+				tzStr = strings.TrimSpace(tzStr)
+				if parsed, found := tryParseTimezone(tzStr); found {
+					tzLoc = parsed
+				} else {
+					return time.Time{}, false
+				}
+			}
+			y, m, d := now.Date()
+			return time.Date(y, m, d, hour, minute, second, 0, tzLoc), true
+		}
+	}
+
+	// All-digit formats
+	if !isAllDigits(str) {
+		return time.Time{}, false
+	}
+
+	// 6-digit hhmmss: compact time-only format
+	if len(str) == 6 {
+		hour, _ := strconv.Atoi(str[0:2])
+		minute, _ := strconv.Atoi(str[2:4])
+		second, _ := strconv.Atoi(str[4:6])
+		if IsValidTime(hour, minute, second) {
+			y, m, d := now.Date()
+			return time.Date(y, m, d, hour, minute, second, 0, loc), true
+		}
+	}
+
+	// 7-digit pgydotd: year + day-of-year (e.g., "2006167" = June 16, 2006)
+	if len(str) == 7 {
+		year, _ := strconv.Atoi(str[0:4])
+		doy, _ := strconv.Atoi(str[4:7])
+		if year >= 1 && doy >= 1 && doy <= 366 {
+			t := time.Date(year, 1, 1, 0, 0, 0, 0, loc).AddDate(0, 0, doy-1)
+			if t.Year() == year { // ensure doy didn't overflow into next year
+				return t, true
+			}
+		}
+	}
+
+	return time.Time{}, false
+}
+
 // parseMonthNameFormat parses formats like "Jan-15-2006" or "2006-Jan-15"
 func parseMonthNameFormat(str string, loc *time.Location) (time.Time, bool) {
 	parts := strings.Split(str, "-")
@@ -260,12 +345,24 @@ func getMonthByNameFlex(name string) (time.Month, bool) {
 func parseDayMonthYear(str string, loc *time.Location) (time.Time, bool) {
 	s := str
 
-	// Skip leading day-of-week like "Sat " or "Thu, "
-	if len(s) >= 3 {
+	// Skip leading day-of-week like "Sat " or "Thursday, "
+	// Try full weekday names first, then 3-letter abbreviations
+	stripped := false
+	for _, wdLen := range []int{9, 8, 7, 6, 3} { // wednesday=9, thursday=8, saturday=8, tuesday=7, monday=6, etc.
+		if len(s) >= wdLen {
+			prefix := s[:wdLen]
+			if getDayOfWeek(prefix) >= 0 {
+				s = s[wdLen:]
+				s = strings.TrimLeft(s, ", ")
+				stripped = true
+				break
+			}
+		}
+	}
+	if !stripped && len(s) >= 3 {
 		prefix := s[:3]
 		if getDayOfWeek(prefix) >= 0 {
 			s = s[3:]
-			// Skip optional comma and whitespace
 			s = strings.TrimLeft(s, ", ")
 		}
 	}
@@ -278,6 +375,17 @@ func parseDayMonthYear(str string, loc *time.Location) (time.Time, bool) {
 	}
 
 	idx := 0
+
+	// Handle hyphen-separated date: "24-Jan-2019" or "24-Jan-19"
+	// (used by DATE_COOKIE and DATE_RFC850 formats)
+	if strings.Contains(fields[0], "-") {
+		dateParts := strings.SplitN(fields[0], "-", 3)
+		if len(dateParts) == 3 {
+			// Replace the single hyphenated field with 3 separate fields
+			rest := fields[1:]
+			fields = append(dateParts, rest...)
+		}
+	}
 
 	// Parse day (may include ordinal suffix)
 	dayStr := stripOrdinalSuffix(fields[idx])
@@ -492,16 +600,17 @@ func parseMonthYearOnly(str string, loc *time.Location) (time.Time, bool) {
 		return time.Time{}, false
 	}
 
-	// Try "Month Year" (year must be >= 100 to avoid "April 4" being treated as year 4)
+	// Try "Month Year" — year must be >= 100 or have 4+ digits (e.g., "0099") to avoid
+	// "April 4" being treated as year 4
 	if month, ok := getMonthByNameFlex(fields[0]); ok {
 		year, err := strconv.Atoi(fields[1])
-		if err == nil && year >= 100 {
+		if err == nil && (year >= 100 || len(fields[1]) >= 4) {
 			return time.Date(year, month, 1, 0, 0, 0, 0, loc), true
 		}
 	}
 
 	// Try "Year Month"
-	if year, err := strconv.Atoi(fields[0]); err == nil && year >= 100 {
+	if year, err := strconv.Atoi(fields[0]); err == nil && (year >= 100 || len(fields[0]) >= 4) {
 		if month, ok := getMonthByNameFlex(fields[1]); ok {
 			return time.Date(year, month, 1, 0, 0, 0, 0, loc), true
 		}
@@ -511,21 +620,41 @@ func parseMonthYearOnly(str string, loc *time.Location) (time.Time, bool) {
 }
 
 // parseTimeBeforeDate parses formats where time precedes the date:
-// "19:30 Dec 17 2005", "17:00 2004-01-01"
+// "19:30 Dec 17 2005", "17:00 2004-01-01", "1pm Aug 1 GMT 2007"
 func parseTimeBeforeDate(str string, loc *time.Location) (time.Time, bool) {
 	fields := strings.Fields(str)
 	if len(fields) < 2 {
 		return time.Time{}, false
 	}
 
-	// First field must look like a time (contains ':')
-	if !strings.Contains(fields[0], ":") {
-		return time.Time{}, false
-	}
+	var hour, minute, second int
 
-	hour, minute, second, _, ok := parseFlexTime(fields[0])
-	if !ok || !IsValidTime(hour, minute, second) {
-		return time.Time{}, false
+	// Try colon-based time (19:30, 17:00:00, etc.)
+	if strings.Contains(fields[0], ":") {
+		var ok bool
+		hour, minute, second, _, ok = parseFlexTime(fields[0])
+		if !ok || !IsValidTime(hour, minute, second) {
+			return time.Time{}, false
+		}
+	} else {
+		// Try bare AM/PM time: "1pm", "12am", "3am"
+		f := strings.ToLower(fields[0])
+		var ampm string
+		if strings.HasSuffix(f, "pm") {
+			ampm = "pm"
+			f = f[:len(f)-2]
+		} else if strings.HasSuffix(f, "am") {
+			ampm = "am"
+			f = f[:len(f)-2]
+		}
+		if ampm == "" {
+			return time.Time{}, false
+		}
+		h, err := strconv.Atoi(f)
+		if err != nil || h < 1 || h > 12 {
+			return time.Time{}, false
+		}
+		hour = applyAMPM(h, ampm)
 	}
 
 	// Try to parse the rest as a date
@@ -536,7 +665,7 @@ func parseTimeBeforeDate(str string, loc *time.Location) (time.Time, bool) {
 		return time.Date(t.Year(), t.Month(), t.Day(), hour, minute, second, 0, loc), true
 	}
 
-	// Try month name date: "Dec 17 2005"
+	// Try month name date with optional timezone: "Aug 1 2007", "Aug 1 GMT 2007"
 	dateFields := strings.Fields(dateStr)
 	if len(dateFields) >= 2 {
 		if month, ok := getMonthByNameFlex(dateFields[0]); ok {
@@ -544,12 +673,27 @@ func parseTimeBeforeDate(str string, loc *time.Location) (time.Time, bool) {
 			day, err := strconv.Atoi(dayStr)
 			if err == nil && day >= 1 && day <= 31 {
 				year := time.Now().Year()
-				if len(dateFields) >= 3 {
-					if y, err := strconv.Atoi(dateFields[2]); err == nil {
+				tzLoc := loc
+				fidx := 2
+
+				// Parse optional timezone and year from remaining fields
+				for fidx < len(dateFields) {
+					// Try as year
+					if y, err := strconv.Atoi(dateFields[fidx]); err == nil && y > 0 {
 						year = y
+						fidx++
+						continue
 					}
+					// Try as timezone
+					if tz, found := tryParseTimezone(dateFields[fidx]); found {
+						tzLoc = tz
+						fidx++
+						continue
+					}
+					break
 				}
-				return time.Date(year, month, day, hour, minute, second, 0, loc), true
+
+				return time.Date(year, month, day, hour, minute, second, 0, tzLoc), true
 			}
 		}
 	}
@@ -790,6 +934,10 @@ func parseDateTimeTZRelative(str string, loc *time.Location) (time.Time, bool) {
 				if t, ok := parseISOFormat(datePart, loc); ok {
 					return applyRelativeUnit(t, amount, unit), true
 				}
+				// Try RFC 2822 / DD Mon YYYY format: "Mon, 08 May 2006 13:06:44 -0400"
+				if t, ok := parseDayMonthYear(datePart, loc); ok {
+					return applyRelativeUnit(t, amount, unit), true
+				}
 			}
 		}
 	}
@@ -926,6 +1074,7 @@ func parseRomanNumeralDate(str string, loc *time.Location) (time.Time, bool) {
 
 // parseNumberedWeekday parses formats like "1 Monday December 2008", "second Monday December 2008"
 // It handles formats like "first Monday of December 2008" or "3rd Friday of January"
+// Also handles "+N week Thursday Nov 2007" (week offset + weekday + month + year)
 func parseNumberedWeekday(str string, now time.Time, loc *time.Location) (time.Time, bool) {
 	fields := strings.Fields(str)
 	if len(fields) < 3 {
@@ -934,6 +1083,7 @@ func parseNumberedWeekday(str string, now time.Time, loc *time.Location) (time.T
 
 	idx := 0
 	var ordinal int
+	isWordOrdinal := false // tracks "first/second/third" vs numeric ordinals
 
 	// Parse the ordinal (numeric or word)
 	// Also handle bare weekday name as first field: "Thursday Nov 2007" = first Thursday
@@ -947,18 +1097,23 @@ func parseNumberedWeekday(str string, now time.Time, loc *time.Location) (time.T
 		switch strings.ToLower(fields[idx]) {
 		case "first", "1st":
 			ordinal = 1
+			isWordOrdinal = true
 			idx++
 		case "second", "2nd":
 			ordinal = 2
+			isWordOrdinal = true
 			idx++
 		case "third", "3rd":
 			ordinal = 3
+			isWordOrdinal = true
 			idx++
 		case "fourth", "4th":
 			ordinal = 4
+			isWordOrdinal = true
 			idx++
 		case "fifth", "5th":
 			ordinal = 5
+			isWordOrdinal = true
 			idx++
 		case "last":
 			ordinal = -1
@@ -971,6 +1126,15 @@ func parseNumberedWeekday(str string, now time.Time, loc *time.Location) (time.T
 			} else {
 				return time.Time{}, false
 			}
+		}
+	}
+
+	// Handle "+N week(s) Weekday Month Year" — skip "week(s)" after numeric ordinal
+	if idx < len(fields) {
+		unit := normalizeTimeUnit(fields[idx])
+		if unit == UnitWeek {
+			isWordOrdinal = true // week-based ordinals use same semantics as word ordinals
+			idx++
 		}
 	}
 
@@ -989,8 +1153,10 @@ func parseNumberedWeekday(str string, now time.Time, loc *time.Location) (time.T
 	}
 	idx++
 
-	// Skip optional "of"
+	// Check for optional "of" — its presence changes ordinal semantics
+	hasOf := false
 	if idx < len(fields) && strings.ToLower(fields[idx]) == "of" {
+		hasOf = true
 		idx++
 	}
 
@@ -1082,7 +1248,14 @@ func parseNumberedWeekday(str string, now time.Time, loc *time.Location) (time.T
 		daysUntilFirst := (dayOfWeek - firstDayOfWeek + 7) % 7
 
 		if ordinal > 0 {
-			resultDay = 1 + daysUntilFirst + (ordinal-1)*7
+			if isWordOrdinal && !hasOf {
+				// PHP semantics: "first Thursday Nov" = +1 week from first occurrence
+				// "first/second/third" without "of" skips forward by ordinal weeks
+				resultDay = 1 + daysUntilFirst + ordinal*7
+			} else {
+				// With "of" or numeric ordinals: Nth occurrence in the month
+				resultDay = 1 + daysUntilFirst + (ordinal-1)*7
+			}
 
 			lastDayOfMonth := daysInMonth(year, month)
 			if resultDay > lastDayOfMonth {

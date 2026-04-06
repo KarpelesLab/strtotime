@@ -303,12 +303,15 @@ func parsePositiveYear(str string, loc *time.Location) (time.Time, bool) {
 	}
 	rest := str[1:]
 
-	spaceIdx := strings.IndexByte(rest, ' ')
+	// Split on space or 'T'/'t' separator (ISO 8601 expanded uses T)
 	datePart := rest
 	timeTzPart := ""
-	if spaceIdx >= 0 {
+	if spaceIdx := strings.IndexByte(rest, ' '); spaceIdx >= 0 {
 		datePart = rest[:spaceIdx]
 		timeTzPart = strings.TrimSpace(rest[spaceIdx+1:])
+	} else if tIdx := strings.IndexByte(rest, 't'); tIdx >= 0 {
+		datePart = rest[:tIdx]
+		timeTzPart = rest[tIdx+1:]
 	}
 
 	if strings.Count(datePart, "-") != 2 {
@@ -321,8 +324,8 @@ func parsePositiveYear(str string, loc *time.Location) (time.Time, bool) {
 	if !isAllDigits(parts[0]) || !isAllDigits(parts[1]) || !isAllDigits(parts[2]) {
 		return time.Time{}, false
 	}
-	// Must have a year with > 4 digits to differentiate from "+1 week" etc.
-	if len(parts[0]) < 5 {
+	// Must have a year with >= 4 digits to differentiate from "+1 week" etc.
+	if len(parts[0]) < 4 {
 		return time.Time{}, false
 	}
 	year, _ := strconv.Atoi(parts[0])
