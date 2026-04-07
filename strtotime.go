@@ -8,17 +8,65 @@ import (
 	"time"
 )
 
-// StrToTime will convert the provided string into a time similarly to how PHP strtotime() works.
-func StrToTime(str string, opts ...Option) (time.Time, error) {
+// formatParser is the signature for format-specific parsers in the parser pipeline.
+type formatParser func(str string, now time.Time, loc *time.Location, opts []Option) (time.Time, bool)
+
+// formatParsers is the ordered list of format parsers tried by StrToTime.
+// The order is critical for PHP compatibility — do not reorder without testing.
+var formatParsers = []formatParser{
+	wrapLoc(parseEuropeanFormat),
+	wrapNow(parseFrontBackOf),
+	wrapLoc(parseRomanNumeralDate),
+	wrapLoc(parseZeroDate),
+	wrapLoc(parseSignedYear),
+	wrapLoc(parseISO8601),
+	wrapLoc(parseDateTimeFormat),
+	wrapLoc(parseWithTimezone),
+	wrapLoc(parseISOFormat),
+	wrapLoc(parseYearMonthFormat),
+	wrapLoc(parseSlashFormat),
+	wrapLoc(parseUSFormat),
+	wrapLoc(parseUSDateWithTime),
+	wrapLoc(parseShortYearUSDateWithMilitaryTime),
+	wrapLoc(parseCompactTimestamp),
+	wrapNow(parseCompactTimeFormats),
+	wrapLoc(parseMonthNameFormat),
+	wrapLoc(parseHTTPLogFormat),
+	wrapLoc(parseDateTimeTZRelative),
+	wrapLoc(parseDateWithTZ),
+	wrapLoc(parseDayMonthYear),
+	wrapLoc(parseMonthYearOnly),
+	wrapLoc(parseTimeBeforeDate),
+	wrapLoc(parseMonthDayTimeYear),
+	wrapNow(parseFirstLastDayOfDate),
+	wrapNow(parseNumberedWeekday),
+}
+
+// wrapLoc wraps a (str, loc) parser into a formatParser.
+func wrapLoc(fn func(string, *time.Location) (time.Time, bool)) formatParser {
+	return func(str string, now time.Time, loc *time.Location, opts []Option) (time.Time, bool) {
+		return fn(str, loc)
+	}
+}
+
+// wrapNow wraps a (str, now, loc) parser into a formatParser.
+func wrapNow(fn func(string, time.Time, *time.Location) (time.Time, bool)) formatParser {
+	return func(str string, now time.Time, loc *time.Location, opts []Option) (time.Time, bool) {
+		return fn(str, now, loc)
+	}
+}
+
+// resolveOptions processes StrToTime options and returns the base time and location.
+func resolveOptions(opts []Option) (time.Time, *time.Location) {
 	var now time.Time
-	loc := time.Local // Default timezone to local
+	loc := time.Local
 	tzExplicit := false
 
 	for _, opt := range opts {
 		switch v := opt.(type) {
-		case Rel: // relative to
+		case Rel:
 			now = time.Time(v)
-		case tzOption: // timezone
+		case tzOption:
 			if v.loc != nil {
 				loc = v.loc
 				tzExplicit = true
@@ -26,7 +74,6 @@ func StrToTime(str string, opts ...Option) (time.Time, error) {
 		}
 	}
 
-	// If a Rel time was provided but no explicit timezone, inherit from Rel
 	if !now.IsZero() && !tzExplicit {
 		loc = now.Location()
 	}
@@ -37,312 +84,155 @@ func StrToTime(str string, opts ...Option) (time.Time, error) {
 		now = now.In(loc)
 	}
 
-	// Normalize string - trim and lowercase
+	return now, loc
+}
+
+// tryParseUnixTimestamp handles "@timestamp" and "@timestamp.fraction [TZ]" format.
+func tryParseUnixTimestamp(str string, loc *time.Location) (time.Time, bool) {
+	if len(str) == 0 || str[0] != '@' {
+		return time.Time{}, false
+	}
+	unixTimeStr := str[1:]
+	tzParts := strings.SplitN(unixTimeStr, " ", 2)
+	timestamp := tzParts[0]
+
+	applyTZ := func(result time.Time) time.Time {
+		if len(tzParts) > 1 && tzParts[1] != "" {
+			if tzLoc, found := tryParseTimezone(tzParts[1]); found {
+				return result.In(tzLoc)
+			}
+		}
+		return result
+	}
+
+	if idx := strings.Index(timestamp, "."); idx != -1 {
+		unixTime, err := strconv.ParseInt(timestamp[:idx], 10, 64)
+		if err != nil {
+			return time.Time{}, false
+		}
+		fracPart, err := strconv.ParseFloat("0."+timestamp[idx+1:], 64)
+		if err != nil {
+			fracPart = 0.0
+		}
+		nanoSec := int64(fracPart * 1e9)
+		return applyTZ(time.Unix(unixTime, nanoSec).In(loc)), true
+	}
+
+	unixTime, err := strconv.ParseInt(timestamp, 10, 64)
+	if err != nil {
+		return time.Time{}, false
+	}
+	return applyTZ(time.Unix(unixTime, 0).In(loc)), true
+}
+
+// tryKeyword handles keyword time expressions: now, today, tomorrow, yesterday, midnight, noon.
+func tryKeyword(str string, now time.Time, loc *time.Location) (time.Time, bool) {
+	switch str {
+	case "now":
+		return now, true
+	case "today", "midnight":
+		y, m, d := now.Date()
+		return time.Date(y, m, d, 0, 0, 0, 0, loc), true
+	case "tomorrow":
+		t := now.AddDate(0, 0, 1)
+		y, m, d := t.Date()
+		return time.Date(y, m, d, 0, 0, 0, 0, loc), true
+	case "yesterday":
+		t := now.AddDate(0, 0, -1)
+		y, m, d := t.Date()
+		return time.Date(y, m, d, 0, 0, 0, 0, loc), true
+	case "noon":
+		y, m, d := now.Date()
+		return time.Date(y, m, d, 12, 0, 0, 0, loc), true
+	}
+	return time.Time{}, false
+}
+
+// tryWeekdayPrefixReparse strips a leading weekday name and reparses the rest.
+// Handles: "Sun 2017-01-01", "Fri Aug 20 1993 23:59:59", etc.
+func tryWeekdayPrefixReparse(str string, now time.Time, loc *time.Location, opts []Option) (time.Time, bool) {
+	rest, prefixDayNum, stripped := stripWeekdayPrefix(str)
+	if !stripped {
+		return time.Time{}, false
+	}
+
+	// Don't strip if rest is "next/last/this week" — the token parser handles these
+	restTrimmed := strings.TrimSpace(rest)
+	if strings.HasPrefix(restTrimmed, "next ") || strings.HasPrefix(restTrimmed, "last ") || strings.HasPrefix(restTrimmed, "this ") {
+		return time.Time{}, false
+	}
+
+	t, err := StrToTime(rest, opts...)
+	if err != nil {
+		return time.Time{}, false
+	}
+
+	// PHP behavior: if the weekday prefix doesn't match the parsed date,
+	// advance to the next matching weekday
+	if prefixDayNum >= 0 && int(t.Weekday()) != prefixDayNum {
+		daysUntil := (prefixDayNum - int(t.Weekday()) + 7) % 7
+		if daysUntil == 0 {
+			daysUntil = 7
+		}
+		t = t.AddDate(0, 0, daysUntil)
+	}
+	return t, true
+}
+
+// StrToTime will convert the provided string into a time similarly to how PHP strtotime() works.
+func StrToTime(str string, opts ...Option) (time.Time, error) {
+	now, loc := resolveOptions(opts)
+
 	str = strings.ToLower(strings.TrimSpace(str))
 	if str == "" {
 		return time.Time{}, ErrEmptyTimeString
 	}
 
-	// Try Unix timestamp format (@timestamp)
-	if len(str) > 0 && str[0] == '@' {
-		// Parse the Unix timestamp format (e.g., "@1121373041" or "@1121373041.5")
-		unixTimeStr := str[1:]
+	// Unix timestamp (@...)
+	if result, ok := tryParseUnixTimestamp(str, loc); ok {
+		return result, nil
+	}
 
-		// Check if there's a timezone specification after the timestamp
-		tzParts := strings.SplitN(unixTimeStr, " ", 2)
-		timestamp := tzParts[0]
+	// Keywords (now, today, tomorrow, yesterday, midnight, noon)
+	if result, ok := tryKeyword(str, now, loc); ok {
+		return result, nil
+	}
 
-		// Check if timestamp has fractional seconds
-		if idx := strings.Index(timestamp, "."); idx != -1 {
-			// Parse the whole seconds part
-			unixTime, err := strconv.ParseInt(timestamp[:idx], 10, 64)
-			if err != nil {
-				// If we can't parse the integer part, don't try to handle as Unix timestamp
-				goto nextFormat
-			}
-
-			// Parse the fractional part as a float
-			fracPart, err := strconv.ParseFloat("0."+timestamp[idx+1:], 64)
-			if err != nil {
-				// If we can't parse the fraction, just use the integer part
-				fracPart = 0.0
-			}
-
-			// Convert fraction to nanoseconds (range: 0-999999999)
-			nanoSec := int64(fracPart * 1e9)
-
-			// Create the time with the proper Unix seconds and nanoseconds
-			result := time.Unix(unixTime, nanoSec).In(loc)
-
-			// If there's a timezone specified, try to use it
-			if len(tzParts) > 1 && tzParts[1] != "" {
-				if tzLoc, found := tryParseTimezone(tzParts[1]); found {
-					result = result.In(tzLoc)
-				}
-			}
-
+	// Try each format parser in order
+	for _, parser := range formatParsers {
+		if result, ok := parser(str, now, loc, opts); ok {
 			return result, nil
-		} else {
-			// No fractional part, parse as an integer
-			unixTime, err := strconv.ParseInt(timestamp, 10, 64)
-			if err == nil {
-				result := time.Unix(unixTime, 0).In(loc)
-
-				// If there's a timezone specified, try to use it
-				if len(tzParts) > 1 && tzParts[1] != "" {
-					if tzLoc, found := tryParseTimezone(tzParts[1]); found {
-						result = result.In(tzLoc)
-					}
-				}
-
-				return result, nil
-			}
-		}
-	}
-nextFormat:
-
-	// Try European date format like "24.11.22"
-	if t, ok := parseEuropeanFormat(str, loc); ok {
-		return t, nil
-	}
-
-	// Handle special cases for simple strings
-	switch str {
-	case "now":
-		return now, nil
-	case "today":
-		year, month, day := now.Date()
-		return time.Date(year, month, day, 0, 0, 0, 0, loc), nil
-	case "tomorrow":
-		tomorrow := now.AddDate(0, 0, 1)
-		year, month, day := tomorrow.Date()
-		return time.Date(year, month, day, 0, 0, 0, 0, loc), nil
-	case "yesterday":
-		yesterday := now.AddDate(0, 0, -1)
-		year, month, day := yesterday.Date()
-		return time.Date(year, month, day, 0, 0, 0, 0, loc), nil
-	case "midnight":
-		year, month, day := now.Date()
-		return time.Date(year, month, day, 0, 0, 0, 0, loc), nil
-	case "noon":
-		year, month, day := now.Date()
-		return time.Date(year, month, day, 12, 0, 0, 0, loc), nil
-	}
-
-	// Try "front of" / "back of" Scottish time expressions
-	if t, ok := parseFrontBackOf(str, now, loc); ok {
-		return t, nil
-	}
-
-	// Try Roman numeral month date: "20 VI. 2005"
-	if t, ok := parseRomanNumeralDate(str, loc); ok {
-		return t, nil
-	}
-
-	// Try zero date special case
-	if t, ok := parseZeroDate(str, loc); ok {
-		return t, nil
-	}
-
-	// Try negative year format: -YYYY-MM-DD [HH:MM:SS [TZ]]
-	if len(str) > 0 && str[0] == '-' {
-		if t, ok := parseNegativeYear(str, loc); ok {
-			return t, nil
 		}
 	}
 
-	// Try explicit positive year format: +YYYYY...-MM-DD [HH:MM:SS [TZ]]
-	if len(str) > 0 && str[0] == '+' {
-		if t, ok := parsePositiveYear(str, loc); ok {
-			return t, nil
-		}
-	}
-
-	// Try ISO 8601 formats (T separator, week dates, timezone offsets)
-	if t, ok := parseISO8601(str, loc); ok {
-		return t, nil
-	}
-
-	// Try to parse datetime format (YYYY-MM-DD HH:MM:SS [TZ])
-	if t, ok := parseDateTimeFormat(str, loc); ok {
-		return t, nil
-	}
-
-	// Try date with timezone format
-	if t, ok := parseWithTimezone(str, loc); ok {
-		return t, nil
-	}
-
-	// Try standard date formats
-	if t, ok := parseISOFormat(str, loc); ok {
-		return t, nil
-	}
-
-	// Try YYYY-MM (year-month only)
-	if t, ok := parseYearMonthFormat(str, loc); ok {
-		return t, nil
-	}
-
-	if t, ok := parseSlashFormat(str, loc); ok {
-		return t, nil
-	}
-
-	if t, ok := parseUSFormat(str, loc); ok {
-		return t, nil
-	}
-
-	// Try US date with time (MM/DD/YYYY H:MM AM)
-	if t, ok := parseUSDateWithTime(str, loc); ok {
-		return t, nil
-	}
-
-	// Try short-year US date with military time (MM/DD/YY HHMM)
-	if t, ok := parseShortYearUSDateWithMilitaryTime(str, loc); ok {
-		return t, nil
-	}
-
-	// Try extended date formats
-	if t, ok := parseCompactTimestamp(str, loc); ok {
-		return t, nil
-	}
-
-	// Try compact time formats (hhmmss, year+doy, t-prefix, dotted time)
-	if t, ok := parseCompactTimeFormats(str, now, loc); ok {
-		return t, nil
-	}
-
-	if t, ok := parseMonthNameFormat(str, loc); ok {
-		return t, nil
-	}
-
-	if t, ok := parseHTTPLogFormat(str, loc); ok {
-		return t, nil
-	}
-
-	// Try date + timezone + relative: "2004-10-31 EDT +1 hour", "Mon, 08 May 2006 13:06:44 -0400 +30 days"
-	// Must come before parseDayMonthYear to avoid swallowing the relative part
-	if t, ok := parseDateTimeTZRelative(str, loc); ok {
-		return t, nil
-	}
-
-	// Try date + TZ: "2014-01-01 Asia/Tokyo"
-	// Must come before parseDateWithRelativeTime to avoid treating TZ as relative
-	if t, ok := parseDateWithTZ(str, loc); ok {
-		return t, nil
-	}
-
-	// Check if this is a date followed by a relative time adjustment
-	// (must come before compound expression check)
+	// Date followed by relative time adjustment: "2023-05-30 -1 month"
 	if result, ok := parseDateWithRelativeTime(str, now, loc, opts); ok {
 		return result, nil
 	}
 
-	// Try DD Mon YYYY format (RFC 2822, etc.)
-	if t, ok := parseDayMonthYear(str, loc); ok {
-		return t, nil
+	// Weekday prefix stripping + reparse: "Sun 2017-01-01", "Fri Aug 20 1993 23:59:59"
+	if result, ok := tryWeekdayPrefixReparse(str, now, loc, opts); ok {
+		return result, nil
 	}
 
-	// Try month + year only: "Oct 2001", "2001 Oct"
-	if t, ok := parseMonthYearOnly(str, loc); ok {
-		return t, nil
-	}
-
-	// Try time before date: "19:30 Dec 17 2005"
-	if t, ok := parseTimeBeforeDate(str, loc); ok {
-		return t, nil
-	}
-
-	// Try "Month Day Time Year": "Dec 17 19:30 2005"
-	if t, ok := parseMonthDayTimeYear(str, loc); ok {
-		return t, nil
-	}
-
-	// Try "first/last day of YYYY-MM" or "first/last day of +1 month"
-	if t, ok := parseFirstLastDayOfDate(str, now, loc); ok {
-		return t, nil
-	}
-
-	// Try parsing numbered weekday (e.g. "first Monday of December 2008")
-	if t, ok := parseNumberedWeekday(str, now, loc); ok {
-		return t, nil
-	}
-
-	// Try stripping leading day-of-week name and reparsing the rest
-	// Must come before isCompoundExpression to avoid "Fri 2017-01-06" being
-	// split on "-" as a compound expression.
-	// Handles: "Sun 2017-01-01", "Fri Aug 20 1993 23:59:59", etc.
-	{
-		stripped := false
-		var rest string
-		prefixDayNum := -1
-		// Try full weekday names first (must check before 3-letter to avoid partial match)
-		for _, name := range []string{"sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"} {
-			if strings.HasPrefix(str, name) && len(str) > len(name) {
-				r := strings.TrimLeft(str[len(name):], ", ")
-				if len(r) > 0 {
-					rest = r
-					prefixDayNum = getDayOfWeek(name)
-					stripped = true
-					break
-				}
-			}
-		}
-		// Try 3-letter abbreviations
-		if !stripped && len(str) > 3 {
-			prefix := str[:3]
-			dn := getDayOfWeek(prefix)
-			if dn >= 0 {
-				r := strings.TrimLeft(str[3:], ", ")
-				if len(r) > 0 {
-					rest = r
-					prefixDayNum = dn
-					stripped = true
-				}
-			}
-		}
-		if stripped {
-			// Don't strip if rest is "next/last week" — the token parser
-			// handles "weekday next week [time]" as a unit (bug72719)
-			restTrimmed := strings.TrimSpace(rest)
-			if strings.HasPrefix(restTrimmed, "next ") || strings.HasPrefix(restTrimmed, "last ") || strings.HasPrefix(restTrimmed, "this ") {
-				// Let the token parser handle it
-			} else if t, err := StrToTime(rest, opts...); err == nil {
-				// PHP behavior: if the weekday prefix doesn't match the
-				// parsed date, advance to the next matching weekday
-				if prefixDayNum >= 0 && int(t.Weekday()) != prefixDayNum {
-					daysUntil := (prefixDayNum - int(t.Weekday()) + 7) % 7
-					if daysUntil == 0 {
-						daysUntil = 7
-					}
-					t = t.AddDate(0, 0, daysUntil)
-				}
-				return t, nil
-			}
-		}
-	}
-
-	// Check if this is a compound expression (contains + or - in the middle)
+	// Compound expression (contains + or - in the middle)
 	if isCompoundExpression(str) {
 		return parseCompoundExpression(str, now, opts)
 	}
 
-	// Check if this is an ordinal date: "26th Nov"
+	// Ordinal date: "26th Nov"
 	if result, ok := parseOrdinalDate(str, now, loc); ok {
 		return result, nil
 	}
 
-	// Tokenize the input string
-	tokens := Tokenize(str)
-
-	// Create a parser to process the tokens
+	// Fall through to token-based parser
 	parser := &Parser{
-		tokens:   tokens,
+		tokens:   Tokenize(str),
 		position: 0,
 		result:   now,
 		loc:      loc,
 	}
 
-	// Parse tokens
 	result, err := parser.Parse()
 	if err != nil {
 		return time.Time{}, fmt.Errorf("unable to parse time string: %s: %w", str, err)
@@ -811,12 +701,6 @@ func (p *Parser) tryParseNextLastExpression() (time.Time, bool, error) {
 }
 
 // daysInMonth returns the number of days in a given month and year
-func daysInMonth(year int, month time.Month) int {
-	// Create a date for the first day of the next month, then subtract one day
-	nextMonth := time.Date(year, month+1, 1, 0, 0, 0, 0, time.UTC)
-	lastDay := nextMonth.AddDate(0, 0, -1)
-	return lastDay.Day()
-}
 
 // isCompoundExpression checks if a string is a compound time expression (contains + or - in the middle)
 func isCompoundExpression(str string) bool {
@@ -932,101 +816,15 @@ func parseCompoundExpression(str string, now time.Time, opts []Option) (time.Tim
 	return result, nil
 }
 
-// applyTimeUnitOffset applies a time unit offset to the base time
+// applyTimeUnitOffset applies a time unit offset to the parser's result time.
 func (p *Parser) applyTimeUnitOffset(amount int, unitStr string) (time.Time, error) {
-	unit := normalizeTimeUnit(unitStr)
-
-	switch unit {
-	case UnitDay:
-		return addDaysPHP(p.result, amount), nil
-	case UnitWeek:
-		return addDaysPHP(p.result, amount*7), nil
-	case UnitWeekDay:
-		return addWeekdays(p.result, amount), nil
-	case UnitMonth:
-		return p.result.AddDate(0, amount, 0), nil
-	case UnitYear:
-		return p.result.AddDate(amount, 0, 0), nil
-	case UnitHour:
-		// PHP uses wall-clock arithmetic for hours (important for DST transitions)
-		y, m, d := p.result.Date()
-		h, mi, s := p.result.Clock()
-		return time.Date(y, m, d, h+amount, mi, s, p.result.Nanosecond(), p.result.Location()), nil
-	case UnitMinute:
-		y, m, d := p.result.Date()
-		h, mi, s := p.result.Clock()
-		return time.Date(y, m, d, h, mi+amount, s, p.result.Nanosecond(), p.result.Location()), nil
-	case UnitSecond:
-		y, m, d := p.result.Date()
-		h, mi, s := p.result.Clock()
-		return time.Date(y, m, d, h, mi, s+amount, p.result.Nanosecond(), p.result.Location()), nil
+	canonical := normalizeTimeUnit(unitStr)
+	switch canonical {
+	case UnitDay, UnitWeek, UnitWeekDay, UnitMonth, UnitYear, UnitHour, UnitMinute, UnitSecond:
+		return applyTimeOffset(p.result, amount, unitStr), nil
 	default:
 		return time.Time{}, fmt.Errorf("%w: %s", ErrInvalidTimeUnit, unitStr)
 	}
-}
-
-// fixDSTGap adjusts a time that fell into a DST spring-forward gap.
-// When time.Date produces a result on the wrong day (Go falls backward),
-// this shifts forward to match PHP's behavior (which falls forward).
-func fixDSTGap(t time.Time, wantYear int, wantMonth time.Month, wantDay int) time.Time {
-	if t.Year() == wantYear && t.Month() == wantMonth && t.Day() == wantDay {
-		return t
-	}
-	// DST gap: shift forward by 1 hour until we land on the right day
-	for i := 0; i < 4; i++ {
-		t = t.Add(time.Hour)
-		if t.Day() == wantDay && t.Month() == wantMonth && t.Year() == wantYear {
-			return t
-		}
-	}
-	return t // give up after 4 hours
-}
-
-// addDaysPHP adds N calendar days using PHP-compatible DST handling.
-// It preserves wall-clock time (like Go's AddDate) but when the result
-// falls in a DST gap (non-existent local time), it shifts forward past
-// the gap instead of backward (which is what Go's AddDate does).
-func addDaysPHP(t time.Time, n int) time.Time {
-	result := t.AddDate(0, 0, n)
-	// Compute the expected date in UTC to avoid DST-related day shifts
-	wantUTC := time.Date(t.Year(), t.Month(), t.Day()+n, 12, 0, 0, 0, time.UTC)
-	if result.Year() != wantUTC.Year() || result.Month() != wantUTC.Month() || result.Day() != wantUTC.Day() {
-		// DST gap: AddDate landed on wrong day. Use duration-based add instead.
-		return t.Add(time.Duration(n) * 24 * time.Hour)
-	}
-	return result
-}
-
-// addWeekdays adds N business days (Mon-Fri) to the given time.
-// PHP behavior: if starting on Sat/Sun, snap to Monday first (counts as 1 weekday),
-// then continue adding remaining weekdays.
-func addWeekdays(t time.Time, n int) time.Time {
-	if n == 0 {
-		// PHP behavior: 0 weekdays from a weekend snaps to next Monday
-		if t.Weekday() == time.Saturday {
-			return t.AddDate(0, 0, 2)
-		}
-		if t.Weekday() == time.Sunday {
-			return t.AddDate(0, 0, 1)
-		}
-		return t
-	}
-
-	step := 1
-	if n < 0 {
-		step = -1
-		n = -n
-	}
-
-	result := t
-	for i := 0; i < n; i++ {
-		result = result.AddDate(0, 0, step)
-		// Skip weekends
-		for result.Weekday() == time.Saturday || result.Weekday() == time.Sunday {
-			result = result.AddDate(0, 0, step)
-		}
-	}
-	return result
 }
 
 // tryParseRelativeTime attempts to parse expressions like "+1 day" or "-3 weeks"
@@ -1354,161 +1152,6 @@ func (p *Parser) tryParseMonthNameFormat() (time.Time, bool, error) {
 }
 
 // getMonthByName converts a month name to its number
-func getMonthByName(name string) (time.Month, bool) {
-	monthNames := map[string]time.Month{
-		"january":   time.January,
-		"jan":       time.January,
-		"february":  time.February,
-		"feb":       time.February,
-		"march":     time.March,
-		"mar":       time.March,
-		"april":     time.April,
-		"apr":       time.April,
-		"may":       time.May,
-		"june":      time.June,
-		"jun":       time.June,
-		"july":      time.July,
-		"jul":       time.July,
-		"august":    time.August,
-		"aug":       time.August,
-		"september": time.September,
-		"sep":       time.September,
-		"october":   time.October,
-		"oct":       time.October,
-		"november":  time.November,
-		"nov":       time.November,
-		"december":  time.December,
-		"dec":       time.December,
-	}
-
-	lower := strings.ToLower(name)
-	month, ok := monthNames[lower]
-	if ok {
-		return month, true
-	}
-	// Try without trailing period (e.g. "dec." → "dec")
-	month, ok = monthNames[strings.TrimSuffix(lower, ".")]
-	return month, ok
-}
-
-// getDayOfWeek converts day name to day number (0 = Sunday, 6 = Saturday)
-func getDayOfWeek(day string) int {
-	switch strings.ToLower(day) {
-	case "sunday", "sun":
-		return 0
-	case "monday", "mon":
-		return 1
-	case "tuesday", "tue":
-		return 2
-	case "wednesday", "wed":
-		return 3
-	case "thursday", "thu":
-		return 4
-	case "friday", "fri":
-		return 5
-	case "saturday", "sat":
-		return 6
-	default:
-		return -1
-	}
-}
-
-// normalizeTimeUnit converts various time unit notations to a canonical form
-func normalizeTimeUnit(unit string) string {
-	// Map of common time unit variations to their canonical forms
-	unitMap := map[string]string{
-		// Day variations
-		"d":     UnitDay,
-		"day":   UnitDay,
-		"days":  UnitDay,
-		"days.": UnitDay,
-
-		// Week variations
-		"w":     UnitWeek,
-		"wk":    UnitWeek,
-		"wks":   UnitWeek,
-		"wks.":  UnitWeek,
-		"week":  UnitWeek,
-		"weeks": UnitWeek,
-
-		// Weekday (business day) variations
-		"weekday":  UnitWeekDay,
-		"weekdays": UnitWeekDay,
-
-		// Month variations
-		"m":      UnitMonth,
-		"mon":    UnitMonth,
-		"mons":   UnitMonth,
-		"mons.":  UnitMonth,
-		"month":  UnitMonth,
-		"months": UnitMonth,
-
-		// Year variations
-		"y":     UnitYear,
-		"yr":    UnitYear,
-		"yrs":   UnitYear,
-		"yrs.":  UnitYear,
-		"year":  UnitYear,
-		"years": UnitYear,
-
-		// Hour variations
-		"h":      UnitHour,
-		"hr":     UnitHour,
-		"hrs":    UnitHour,
-		"hrs.":   UnitHour,
-		"hour":   UnitHour,
-		"hours":  UnitHour,
-		"hourss": UnitHour,
-
-		// Minute variations
-		"min":     UnitMinute,
-		"mins":    UnitMinute,
-		"mins.":   UnitMinute,
-		"minute":  UnitMinute,
-		"minutes": UnitMinute,
-
-		// Second variations
-		"sec":     UnitSecond,
-		"secs":    UnitSecond,
-		"secs.":   UnitSecond,
-		"second":  UnitSecond,
-		"seconds": UnitSecond,
-	}
-
-	// Try exact match first
-	if canonical, found := unitMap[strings.ToLower(unit)]; found {
-		return canonical
-	}
-
-	// Remove trailing 's' if present for plurals not in the map
-	trimmed := strings.TrimSuffix(strings.ToLower(unit), "s")
-	if canonical, found := unitMap[trimmed]; found {
-		return canonical
-	}
-
-	// Handle prefixes for longer variations
-	lowerUnit := strings.ToLower(unit)
-	if strings.HasPrefix(lowerUnit, "day") {
-		return UnitDay
-	} else if strings.HasPrefix(lowerUnit, "weekday") {
-		return UnitWeekDay
-	} else if strings.HasPrefix(lowerUnit, "week") {
-		return UnitWeek
-	} else if strings.HasPrefix(lowerUnit, "month") {
-		return UnitMonth
-	} else if strings.HasPrefix(lowerUnit, "year") {
-		return UnitYear
-	} else if strings.HasPrefix(lowerUnit, "hour") || strings.HasPrefix(lowerUnit, "hr") {
-		return UnitHour
-	} else if strings.HasPrefix(lowerUnit, "min") {
-		return UnitMinute
-	} else if strings.HasPrefix(lowerUnit, "sec") {
-		return UnitSecond
-	}
-
-	// If we couldn't normalize, return the original unit
-	return unit
-}
 
 // tryParseBareWeekday handles:
 // - Bare weekday name: "tuesday" (next occurrence)
@@ -1887,32 +1530,3 @@ func (p *Parser) tryParseYearOnly() (time.Time, bool, error) {
 }
 
 // ordinalWordToNumber converts ordinal words to numbers
-func ordinalWordToNumber(word string) int {
-	switch strings.ToLower(word) {
-	case "first":
-		return 1
-	case "second":
-		return 2
-	case "third":
-		return 3
-	case "fourth":
-		return 4
-	case "fifth":
-		return 5
-	case "sixth":
-		return 6
-	case "seventh":
-		return 7
-	case "eighth":
-		return 8
-	case "ninth":
-		return 9
-	case "tenth":
-		return 10
-	case "eleventh":
-		return 11
-	case "twelfth":
-		return 12
-	}
-	return 0
-}

@@ -343,31 +343,10 @@ func getMonthByNameFlex(name string) (time.Month, bool) {
 //
 //	"Sat 26th Nov 2005 18:18", "Thu, 20 Nov 2003 16:20:42 +0000"
 func parseDayMonthYear(str string, loc *time.Location) (time.Time, bool) {
-	s := str
-
 	// Skip leading day-of-week like "Sat " or "Thursday, "
-	// Track the weekday number so we can adjust the result if needed (PHP behavior)
-	prefixDayNum := -1
-	for _, wdLen := range []int{9, 8, 7, 6, 3} { // wednesday=9, thursday=8, saturday=8, tuesday=7, monday=6, etc.
-		if len(s) >= wdLen {
-			prefix := s[:wdLen]
-			dn := getDayOfWeek(prefix)
-			if dn >= 0 {
-				prefixDayNum = dn
-				s = s[wdLen:]
-				s = strings.TrimLeft(s, ", ")
-				break
-			}
-		}
-	}
-	if prefixDayNum < 0 && len(s) >= 3 {
-		prefix := s[:3]
-		dn := getDayOfWeek(prefix)
-		if dn >= 0 {
-			prefixDayNum = dn
-			s = s[3:]
-			s = strings.TrimLeft(s, ", ")
-		}
+	s, prefixDayNum, _ := stripWeekdayPrefix(str)
+	if prefixDayNum < 0 {
+		s = str // no weekday found, use original
 	}
 
 	// Try to extract day, month, year from the remaining string
@@ -592,19 +571,6 @@ func parseDayMonthYearCompact(str string, loc *time.Location) (time.Time, bool) 
 }
 
 // applyAMPM converts 12-hour time to 24-hour format
-func applyAMPM(hour int, ampm string) int {
-	if ampm == "am" {
-		if hour == 12 {
-			return 0
-		}
-		return hour
-	}
-	// pm
-	if hour == 12 {
-		return 12
-	}
-	return hour + 12
-}
 
 // parseMonthYearOnly parses "Oct 2001" or "2001 Oct" (month + year, day defaults to 1)
 func parseMonthYearOnly(str string, loc *time.Location) (time.Time, bool) {
@@ -929,60 +895,33 @@ func parseDateTimeTZRelative(str string, loc *time.Location) (time.Time, bool) {
 				// Try to parse the date part
 				// Try ISO 8601
 				if t, ok := parseISO8601(datePart, loc); ok {
-					return applyRelativeUnit(t, amount, unit), true
+					return applyTimeOffset(t, amount, unit), true
 				}
 				// Try datetime with tz
 				if t, ok := parseDateTimeFormat(datePart, loc); ok {
-					return applyRelativeUnit(t, amount, unit), true
+					return applyTimeOffset(t, amount, unit), true
 				}
 				// Try date + time + tz: "2005-07-14 22:30:41 GMT"
 				if t, ok := parseISODateTimeWithTimezone(datePart, loc); ok {
-					return applyRelativeUnit(t, amount, unit), true
+					return applyTimeOffset(t, amount, unit), true
 				}
 				// Try date + tz (no time): "2004-10-31 EDT"
 				if t, ok := parseDateWithTZ(datePart, loc); ok {
-					return applyRelativeUnit(t, amount, unit), true
+					return applyTimeOffset(t, amount, unit), true
 				}
 				// Try plain date
 				if t, ok := parseISOFormat(datePart, loc); ok {
-					return applyRelativeUnit(t, amount, unit), true
+					return applyTimeOffset(t, amount, unit), true
 				}
 				// Try RFC 2822 / DD Mon YYYY format: "Mon, 08 May 2006 13:06:44 -0400"
 				if t, ok := parseDayMonthYear(datePart, loc); ok {
-					return applyRelativeUnit(t, amount, unit), true
+					return applyTimeOffset(t, amount, unit), true
 				}
 			}
 		}
 	}
 
 	return time.Time{}, false
-}
-
-// applyRelativeUnit applies a relative time offset
-func applyRelativeUnit(t time.Time, amount int, unit string) time.Time {
-	switch unit {
-	case UnitDay:
-		return addDaysPHP(t, amount)
-	case UnitWeek:
-		return addDaysPHP(t, amount*7)
-	case UnitMonth:
-		return t.AddDate(0, amount, 0)
-	case UnitYear:
-		return t.AddDate(amount, 0, 0)
-	case UnitHour:
-		y, m, d := t.Date()
-		h, mi, s := t.Clock()
-		return time.Date(y, m, d, h+amount, mi, s, t.Nanosecond(), t.Location())
-	case UnitMinute:
-		y, m, d := t.Date()
-		h, mi, s := t.Clock()
-		return time.Date(y, m, d, h, mi+amount, s, t.Nanosecond(), t.Location())
-	case UnitSecond:
-		y, m, d := t.Date()
-		h, mi, s := t.Clock()
-		return time.Date(y, m, d, h, mi, s+amount, t.Nanosecond(), t.Location())
-	}
-	return t
 }
 
 // parseDateWithTZ parses "YYYY-MM-DD TZname" (date + timezone without time)
@@ -1105,51 +1044,11 @@ func parseNumberedWeekday(str string, now time.Time, loc *time.Location) (time.T
 	}
 
 	idx := 0
-	var ordinal int
-	isWordOrdinal := false // tracks "first/second/third" vs numeric ordinals
 
-	// Parse the ordinal (numeric or word)
-	// Also handle bare weekday name as first field: "Thursday Nov 2007" = first Thursday
-	if n, err := strconv.Atoi(fields[idx]); err == nil {
-		if n <= 0 || n > 5 {
-			return time.Time{}, false
-		}
-		ordinal = n
-		idx++
-	} else {
-		switch strings.ToLower(fields[idx]) {
-		case "first", "1st":
-			ordinal = 1
-			isWordOrdinal = true
-			idx++
-		case "second", "2nd":
-			ordinal = 2
-			isWordOrdinal = true
-			idx++
-		case "third", "3rd":
-			ordinal = 3
-			isWordOrdinal = true
-			idx++
-		case "fourth", "4th":
-			ordinal = 4
-			isWordOrdinal = true
-			idx++
-		case "fifth", "5th":
-			ordinal = 5
-			isWordOrdinal = true
-			idx++
-		case "last":
-			ordinal = -1
-			idx++
-		default:
-			// Check if first field is a weekday name (implies ordinal=1)
-			if getDayOfWeek(fields[idx]) >= 0 {
-				ordinal = 1
-				// Don't advance idx — the weekday will be parsed next
-			} else {
-				return time.Time{}, false
-			}
-		}
+	// Parse the ordinal (numeric, word, or implicit from bare weekday)
+	ordinal, isWordOrdinal, idx, ok := parseOrdinalPrefix(fields, idx)
+	if !ok {
+		return time.Time{}, false
 	}
 
 	// Handle "+N week(s) Weekday Month Year" — skip "week(s)" after numeric ordinal

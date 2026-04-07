@@ -154,15 +154,6 @@ func parseEuropeanFormat(str string, loc *time.Location) (time.Time, bool) {
 }
 
 // parseTwoDigitYear normalizes 2-digit years according to standard practice
-func parseTwoDigitYear(year int) int {
-	if year < 100 {
-		if year < 70 {
-			return year + 2000 // 00-69 -> 2000-2069
-		}
-		return year + 1900 // 70-99 -> 1970-1999
-	}
-	return year
-}
 
 // parseDateTimeFormat parses "YYYY-MM-DD HH:MM:SS" and optionally a timezone offset
 func parseDateTimeFormat(str string, loc *time.Location) (time.Time, bool) {
@@ -269,64 +260,34 @@ func parseYearMonthFormat(str string, loc *time.Location) (time.Time, bool) {
 }
 
 // parseNegativeYear parses "-YYYY-MM-DD [HH:MM:SS [TZ]]" format (negative year)
-func parseNegativeYear(str string, loc *time.Location) (time.Time, bool) {
-	if len(str) < 2 || str[0] != '-' {
+// parseSignedYear parses "-YYYY-MM-DD [HH:MM:SS [TZ]]" or "+YYYY-MM-DD[T][HH:MM:SS [TZ]]" format.
+func parseSignedYear(str string, loc *time.Location) (time.Time, bool) {
+	if len(str) < 2 {
+		return time.Time{}, false
+	}
+	sign := 1
+	switch str[0] {
+	case '-':
+		sign = -1
+	case '+':
+		sign = 1
+	default:
 		return time.Time{}, false
 	}
 	rest := str[1:]
 
 	// Split off the date portion from optional time/tz
-	spaceIdx := strings.IndexByte(rest, ' ')
-	datePart := rest
-	timeTzPart := ""
-	if spaceIdx >= 0 {
-		datePart = rest[:spaceIdx]
-		timeTzPart = strings.TrimSpace(rest[spaceIdx+1:])
-	}
-
-	if strings.Count(datePart, "-") != 2 {
-		return time.Time{}, false
-	}
-	parts := strings.Split(datePart, "-")
-	if len(parts) != 3 {
-		return time.Time{}, false
-	}
-	if !isAllDigits(parts[0]) || !isAllDigits(parts[1]) || !isAllDigits(parts[2]) {
-		return time.Time{}, false
-	}
-	year, _ := strconv.Atoi(parts[0])
-	month, _ := strconv.Atoi(parts[1])
-	day, _ := strconv.Atoi(parts[2])
-	if month < 1 || month > 12 || day < 1 || day > 31 {
-		return time.Time{}, false
-	}
-
-	hour, minute, second, nanos := 0, 0, 0, 0
-	tzLoc := loc
-
-	if timeTzPart != "" {
-		hour, minute, second, nanos, tzLoc = parseTimeTzSuffix(timeTzPart, loc)
-	}
-
-	return time.Date(-year, time.Month(month), day, hour, minute, second, nanos, tzLoc), true
-}
-
-// parsePositiveYear parses "+YYYY...-MM-DD [HH:MM:SS [TZ]]" format (explicit positive large year)
-func parsePositiveYear(str string, loc *time.Location) (time.Time, bool) {
-	if len(str) < 2 || str[0] != '+' {
-		return time.Time{}, false
-	}
-	rest := str[1:]
-
-	// Split on space or 'T'/'t' separator (ISO 8601 expanded uses T)
 	datePart := rest
 	timeTzPart := ""
 	if spaceIdx := strings.IndexByte(rest, ' '); spaceIdx >= 0 {
 		datePart = rest[:spaceIdx]
 		timeTzPart = strings.TrimSpace(rest[spaceIdx+1:])
-	} else if tIdx := strings.IndexByte(rest, 't'); tIdx >= 0 {
-		datePart = rest[:tIdx]
-		timeTzPart = rest[tIdx+1:]
+	} else if sign > 0 {
+		// ISO 8601 expanded format uses T separator (only for positive)
+		if tIdx := strings.IndexByte(rest, 't'); tIdx >= 0 {
+			datePart = rest[:tIdx]
+			timeTzPart = rest[tIdx+1:]
+		}
 	}
 
 	if strings.Count(datePart, "-") != 2 {
@@ -339,10 +300,11 @@ func parsePositiveYear(str string, loc *time.Location) (time.Time, bool) {
 	if !isAllDigits(parts[0]) || !isAllDigits(parts[1]) || !isAllDigits(parts[2]) {
 		return time.Time{}, false
 	}
-	// Must have a year with >= 4 digits to differentiate from "+1 week" etc.
-	if len(parts[0]) < 4 {
+	// Positive years must have >= 4 digits to differentiate from "+1 week" etc.
+	if sign > 0 && len(parts[0]) < 4 {
 		return time.Time{}, false
 	}
+
 	year, _ := strconv.Atoi(parts[0])
 	month, _ := strconv.Atoi(parts[1])
 	day, _ := strconv.Atoi(parts[2])
@@ -357,7 +319,7 @@ func parsePositiveYear(str string, loc *time.Location) (time.Time, bool) {
 		hour, minute, second, nanos, tzLoc = parseTimeTzSuffix(timeTzPart, loc)
 	}
 
-	return time.Date(year, time.Month(month), day, hour, minute, second, nanos, tzLoc), true
+	return time.Date(sign*year, time.Month(month), day, hour, minute, second, nanos, tzLoc), true
 }
 
 // parseTimeTzSuffix parses "HH:MM:SS[.frac] [TZ]" from the suffix of a date string
