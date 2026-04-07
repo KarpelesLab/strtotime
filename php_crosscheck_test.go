@@ -190,6 +190,10 @@ func shouldSkipPHPCheck(input string, goResult time.Time) bool {
 		strings.Contains(strings.ToLower(input), "tenth day") {
 		return true
 	}
+	// Compound sign operators like "+-" or "--": behavior varies across PHP versions
+	if len(input) >= 2 && (input[:2] == "+-" || input[:2] == "--") {
+		return true
+	}
 	// Compact DDMon format without space — PHP uses base year, our behavior differs
 	lower := strings.ToLower(input)
 	if len(lower) >= 4 && len(lower) <= 6 && lower[0] >= '0' && lower[0] <= '9' {
