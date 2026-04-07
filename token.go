@@ -1,10 +1,5 @@
 package strtotime
 
-import (
-	"strings"
-	"unicode"
-)
-
 type tokenType int
 
 const (
@@ -23,57 +18,55 @@ type Token struct {
 }
 
 // Tokenize takes a string and cuts it into tokens.
+// Uses substring slicing to avoid per-token allocations.
 func Tokenize(s string) []Token {
-	var tokens []Token
-	var currentToken strings.Builder
-	var currentType tokenType
-	var pos int
+	if len(s) == 0 {
+		return nil
+	}
 
-	for i, r := range s {
-		var newType tokenType
+	// Pre-allocate with estimated capacity (most inputs have 3-10 tokens)
+	tokens := make([]Token, 0, 8)
+	currentType := classifyByte(s[0])
+	start := 0
 
-		switch {
-		case unicode.IsSpace(r):
-			newType = TypeWhitespace
-		case unicode.IsDigit(r):
-			newType = TypeNumber
-		case isOperator(r):
-			newType = TypeOperator
-		case isPunctuation(r):
-			newType = TypePunctuation
-		default:
-			newType = TypeString
-		}
-
-		// If we're starting a new token or changing token type
-		if i == 0 || newType != currentType {
-			// Add the previous token if it exists
-			if currentToken.Len() > 0 {
-				tokens = append(tokens, Token{
-					Val: currentToken.String(),
-					Typ: currentType,
-					Pos: pos,
-				})
-				currentToken.Reset()
-			}
-
+	for i := 1; i < len(s); i++ {
+		newType := classifyByte(s[i])
+		if newType != currentType {
+			tokens = append(tokens, Token{
+				Val: s[start:i],
+				Typ: currentType,
+				Pos: start,
+			})
 			currentType = newType
-			pos = i
+			start = i
 		}
-
-		currentToken.WriteRune(r)
 	}
 
-	// Add the last token if it exists
-	if currentToken.Len() > 0 {
-		tokens = append(tokens, Token{
-			Val: currentToken.String(),
-			Typ: currentType,
-			Pos: pos,
-		})
-	}
+	// Add the last token
+	tokens = append(tokens, Token{
+		Val: s[start:],
+		Typ: currentType,
+		Pos: start,
+	})
 
 	return tokens
+}
+
+// classifyByte returns the token type for an ASCII byte.
+// Since StrToTime lowercases input, we only see ASCII.
+func classifyByte(c byte) tokenType {
+	switch {
+	case c == ' ' || c == '\t' || c == '\n' || c == '\r':
+		return TypeWhitespace
+	case c >= '0' && c <= '9':
+		return TypeNumber
+	case c == '+' || c == '-' || c == ':' || c == '/' || c == '.':
+		return TypeOperator
+	case c == ',' || c == ';' || c == '(' || c == ')' || c == '[' || c == ']':
+		return TypePunctuation
+	default:
+		return TypeString
+	}
 }
 
 // isOperator checks if a rune is an operator

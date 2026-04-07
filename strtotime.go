@@ -14,32 +14,73 @@ type formatParser func(str string, now time.Time, loc *time.Location, opts []Opt
 // formatParsers is the ordered list of format parsers tried by StrToTime.
 // The order is critical for PHP compatibility — do not reorder without testing.
 var formatParsers = []formatParser{
-	wrapLoc(parseEuropeanFormat),
-	wrapNow(parseFrontBackOf),
-	wrapLoc(parseRomanNumeralDate),
-	wrapLoc(parseZeroDate),
-	wrapLoc(parseSignedYear),
-	wrapLoc(parseISO8601),
-	wrapLoc(parseDateTimeFormat),
-	wrapLoc(parseWithTimezone),
-	wrapLoc(parseISOFormat),
-	wrapLoc(parseYearMonthFormat),
-	wrapLoc(parseSlashFormat),
-	wrapLoc(parseUSFormat),
-	wrapLoc(parseUSDateWithTime),
-	wrapLoc(parseShortYearUSDateWithMilitaryTime),
-	wrapLoc(parseCompactTimestamp),
-	wrapNow(parseCompactTimeFormats),
-	wrapLoc(parseMonthNameFormat),
-	wrapLoc(parseHTTPLogFormat),
-	wrapLoc(parseDateTimeTZRelative),
-	wrapLoc(parseDateWithTZ),
-	wrapLoc(parseDayMonthYear),
-	wrapLoc(parseMonthYearOnly),
-	wrapLoc(parseTimeBeforeDate),
-	wrapLoc(parseMonthDayTimeYear),
-	wrapNow(parseFirstLastDayOfDate),
-	wrapNow(parseNumberedWeekday),
+	guardDigit(wrapLoc(parseEuropeanFormat)), // "15.01.2023" — starts with digit
+	guardPrefix("front of ", "back of ")(wrapNow(parseFrontBackOf)),
+	guardDigit(wrapLoc(parseRomanNumeralDate)), // "20 VI. 2005" — starts with digit
+	guardPrefix("0000-00-00")(wrapLoc(parseZeroDate)),
+	guardByte('-', '+')(wrapLoc(parseSignedYear)),
+	wrapLoc(parseISO8601),                     // many formats, cheap internal guards
+	wrapLoc(parseDateTimeFormat),              // "YYYY-MM-DD HH:MM:SS"
+	wrapLoc(parseWithTimezone),                // various
+	wrapLoc(parseISOFormat),                   // "YYYY-MM-DD"
+	guardDigit(wrapLoc(parseYearMonthFormat)), // "YYYY-MM"
+	guardDigit(wrapLoc(parseSlashFormat)),     // "YYYY/MM/DD"
+	guardDigit(wrapLoc(parseUSFormat)),        // "MM/DD/YYYY"
+	guardDigit(wrapLoc(parseUSDateWithTime)),  // "MM/DD/YYYY H:MM AM"
+	guardDigit(wrapLoc(parseShortYearUSDateWithMilitaryTime)),
+	guardDigit(wrapLoc(parseCompactTimestamp)), // "YYYYMMDDHHMMSS"
+	wrapNow(parseCompactTimeFormats),           // "t0222", "022233", etc.
+	wrapLoc(parseMonthNameFormat),              // "Jan-15-2006"
+	guardDigit(wrapLoc(parseHTTPLogFormat)),    // "10/Oct/2000:..."
+	wrapLoc(parseDateTimeTZRelative),           // "2004-10-31 EDT +1 hour"
+	wrapLoc(parseDateWithTZ),                   // "2014-01-01 Asia/Tokyo"
+	wrapLoc(parseDayMonthYear),                 // "26th Nov 2005"
+	wrapLoc(parseMonthYearOnly),                // "Oct 2001"
+	guardDigit(wrapLoc(parseTimeBeforeDate)),   // "19:30 Dec 17 2005"
+	wrapLoc(parseMonthDayTimeYear),             // "Dec 17 19:30 2005"
+	wrapNow(parseFirstLastDayOfDate),           // "first day of 2010-01"
+	wrapNow(parseNumberedWeekday),              // "first Monday December 2008"
+}
+
+// guardDigit wraps a parser to only call it if the input starts with a digit.
+func guardDigit(fn formatParser) formatParser {
+	return func(str string, now time.Time, loc *time.Location, opts []Option) (time.Time, bool) {
+		if len(str) == 0 || str[0] < '0' || str[0] > '9' {
+			return time.Time{}, false
+		}
+		return fn(str, now, loc, opts)
+	}
+}
+
+// guardByte wraps a parser to only call it if the input starts with one of the given bytes.
+func guardByte(bytes ...byte) func(formatParser) formatParser {
+	return func(fn formatParser) formatParser {
+		return func(str string, now time.Time, loc *time.Location, opts []Option) (time.Time, bool) {
+			if len(str) == 0 {
+				return time.Time{}, false
+			}
+			for _, b := range bytes {
+				if str[0] == b {
+					return fn(str, now, loc, opts)
+				}
+			}
+			return time.Time{}, false
+		}
+	}
+}
+
+// guardPrefix wraps a parser to only call it if the input starts with one of the given prefixes.
+func guardPrefix(prefixes ...string) func(formatParser) formatParser {
+	return func(fn formatParser) formatParser {
+		return func(str string, now time.Time, loc *time.Location, opts []Option) (time.Time, bool) {
+			for _, p := range prefixes {
+				if strings.HasPrefix(str, p) {
+					return fn(str, now, loc, opts)
+				}
+			}
+			return time.Time{}, false
+		}
+	}
 }
 
 // wrapLoc wraps a (str, loc) parser into a formatParser.

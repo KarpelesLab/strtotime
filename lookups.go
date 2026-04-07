@@ -32,22 +32,22 @@ var monthNames = map[string]time.Month{
 	"dec":       time.December,
 }
 
-// getMonthByName returns the time.Month for a month name (case-insensitive).
+// getMonthByName returns the time.Month for a month name.
+// Input should be lowercase (StrToTime lowercases before calling parsers).
 // Handles trailing periods (e.g., "dec." → December).
 func getMonthByName(name string) (time.Month, bool) {
-	lower := strings.ToLower(name)
-	month, ok := monthNames[lower]
+	month, ok := monthNames[name]
 	if ok {
 		return month, true
 	}
-	month, ok = monthNames[strings.TrimSuffix(lower, ".")]
+	month, ok = monthNames[strings.TrimSuffix(name, ".")]
 	return month, ok
 }
 
 // getDayOfWeek converts a day name to day number (0 = Sunday, 6 = Saturday).
-// Returns -1 if the name is not recognized.
+// Input should be lowercase. Returns -1 if the name is not recognized.
 func getDayOfWeek(day string) int {
-	switch strings.ToLower(day) {
+	switch day {
 	case "sunday", "sun":
 		return 0
 	case "monday", "mon":
@@ -94,32 +94,32 @@ var unitMap = map[string]string{
 }
 
 // normalizeTimeUnit converts various time unit notations to a canonical form.
+// Input should be lowercase.
 func normalizeTimeUnit(unit string) string {
-	if canonical, found := unitMap[strings.ToLower(unit)]; found {
+	if canonical, found := unitMap[unit]; found {
 		return canonical
 	}
 
-	trimmed := strings.TrimSuffix(strings.ToLower(unit), "s")
+	trimmed := strings.TrimSuffix(unit, "s")
 	if canonical, found := unitMap[trimmed]; found {
 		return canonical
 	}
 
-	lowerUnit := strings.ToLower(unit)
-	if strings.HasPrefix(lowerUnit, "day") {
+	if strings.HasPrefix(unit, "day") {
 		return UnitDay
-	} else if strings.HasPrefix(lowerUnit, "weekday") {
+	} else if strings.HasPrefix(unit, "weekday") {
 		return UnitWeekDay
-	} else if strings.HasPrefix(lowerUnit, "week") {
+	} else if strings.HasPrefix(unit, "week") {
 		return UnitWeek
-	} else if strings.HasPrefix(lowerUnit, "month") {
+	} else if strings.HasPrefix(unit, "month") {
 		return UnitMonth
-	} else if strings.HasPrefix(lowerUnit, "year") {
+	} else if strings.HasPrefix(unit, "year") {
 		return UnitYear
-	} else if strings.HasPrefix(lowerUnit, "hour") || strings.HasPrefix(lowerUnit, "hr") {
+	} else if strings.HasPrefix(unit, "hour") || strings.HasPrefix(unit, "hr") {
 		return UnitHour
-	} else if strings.HasPrefix(lowerUnit, "min") {
+	} else if strings.HasPrefix(unit, "min") {
 		return UnitMinute
-	} else if strings.HasPrefix(lowerUnit, "sec") {
+	} else if strings.HasPrefix(unit, "sec") {
 		return UnitSecond
 	}
 
