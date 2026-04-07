@@ -259,13 +259,12 @@ func parseYearMonthFormat(str string, loc *time.Location) (time.Time, bool) {
 	return time.Date(year, time.Month(month), 1, 0, 0, 0, 0, loc), true
 }
 
-// parseNegativeYear parses "-YYYY-MM-DD [HH:MM:SS [TZ]]" format (negative year)
 // parseSignedYear parses "-YYYY-MM-DD [HH:MM:SS [TZ]]" or "+YYYY-MM-DD[T][HH:MM:SS [TZ]]" format.
 func parseSignedYear(str string, loc *time.Location) (time.Time, bool) {
 	if len(str) < 2 {
 		return time.Time{}, false
 	}
-	sign := 1
+	var sign int
 	switch str[0] {
 	case '-':
 		sign = -1
