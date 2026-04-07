@@ -3,6 +3,7 @@
 [![Go Reference](https://pkg.go.dev/badge/github.com/KarpelesLab/strtotime.svg)](https://pkg.go.dev/github.com/KarpelesLab/strtotime)
 [![CI](https://github.com/KarpelesLab/strtotime/actions/workflows/ci.yml/badge.svg)](https://github.com/KarpelesLab/strtotime/actions/workflows/ci.yml)
 [![Coverage Status](https://coveralls.io/repos/github/KarpelesLab/strtotime/badge.svg?branch=master)](https://coveralls.io/github/KarpelesLab/strtotime?branch=master)
+[![Go Report Card](https://goreportcard.com/badge/github.com/KarpelesLab/strtotime)](https://goreportcard.com/report/github.com/KarpelesLab/strtotime)
 
 A Go library that parses human-readable date/time strings into `time.Time` objects, inspired by PHP's [strtotime()](https://www.php.net/manual/en/function.strtotime.php) function.
 
