@@ -81,6 +81,7 @@ func TestPHPSpecificVectors(t *testing.T) {
 						result.Nanosecond())
 				}
 			}
+			phpVerify(t, test.input, result, time.Time{}, time.UTC)
 		})
 	}
 }

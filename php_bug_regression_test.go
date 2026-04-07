@@ -72,7 +72,7 @@ func TestPHPBugRegressions(t *testing.T) {
 
 		// bug55397: front-of/back-of (Scottish time expressions)
 		{"bug55397-front", "front of 12pm", time.Date(2005, 12, 12, 10, 0, 0, 0, time.UTC),
-			time.Date(2005, 12, 12, 11, 45, 0, 0, time.UTC), ""},
+			time.Date(2005, 12, 12, 23, 45, 0, 0, time.UTC), ""},
 		{"bug55397-back", "back of 12pm", time.Date(2005, 12, 12, 10, 0, 0, 0, time.UTC),
 			time.Date(2005, 12, 12, 12, 15, 0, 0, time.UTC), ""},
 
@@ -110,6 +110,7 @@ func TestPHPBugRegressions(t *testing.T) {
 				t.Errorf("StrToTime(%q) = %v (unix=%d), want %v (unix=%d)",
 					tt.input, result, result.Unix(), tt.expected, tt.expected.Unix())
 			}
+			phpVerify(t, tt.input, result, tt.base, time.UTC)
 		})
 	}
 }

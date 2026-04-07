@@ -2,6 +2,7 @@ package strtotime
 
 import (
 	"testing"
+	"time"
 )
 
 func TestTimezoneAbbreviations(t *testing.T) {
@@ -48,6 +49,7 @@ func TestTimezoneAbbreviations(t *testing.T) {
 		if got != expected {
 			t.Errorf("For input '%s': expected %s, got %s", test.input, expected, got)
 		}
+		phpVerify(t, test.input, result, time.Time{}, time.UTC)
 	}
 }
 
@@ -83,6 +85,7 @@ func TestTimezoneWithTime(t *testing.T) {
 		if got != expected {
 			t.Errorf("For input '%s': expected %s, got %s", test.input, expected, got)
 		}
+		phpVerify(t, test.input, result, time.Time{}, time.UTC)
 	}
 }
 
@@ -122,5 +125,6 @@ func TestFullTimezoneNames(t *testing.T) {
 		if got != expected {
 			t.Errorf("For input '%s': expected %s, got %s", test.input, expected, got)
 		}
+		phpVerify(t, test.input, result, time.Time{}, time.UTC)
 	}
 }

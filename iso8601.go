@@ -106,7 +106,7 @@ func parseISO8601DateTime(str string, loc *time.Location) (time.Time, bool) {
 // parseISO8601Time parses time components from an ISO 8601 time string.
 // Returns hour, minute, second, nanos, characters consumed, and success.
 func parseISO8601Time(s string) (int, int, int, int, int, bool) {
-	if len(s) < 2 {
+	if len(s) < 1 {
 		return 0, 0, 0, 0, 0, false
 	}
 

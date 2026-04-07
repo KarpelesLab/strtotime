@@ -266,10 +266,12 @@ func TestPHPDateRegressions(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := StrToTime(tt.input, InTZ(time.UTC), Rel(tt.base))
+			result, err := StrToTime(tt.input, InTZ(time.UTC), Rel(tt.base))
 			if err != nil {
 				t.Errorf("StrToTime(%q) failed: %v", tt.input, err)
+				return
 			}
+			phpVerify(t, tt.input, result, tt.base, time.UTC)
 		})
 	}
 }

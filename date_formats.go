@@ -50,7 +50,8 @@ func parseISOFormat(str string, loc *time.Location) (time.Time, bool) {
 		return time.Time{}, false
 	}
 
-	return time.Date(year, time.Month(month), day, 0, 0, 0, 0, loc), true
+	result := time.Date(year, time.Month(month), day, 0, 0, 0, 0, loc)
+	return fixDSTGap(result, year, time.Month(month), day), true
 }
 
 // parseSlashFormat tries to parse a slash format date (YYYY/MM/DD)
@@ -177,7 +178,11 @@ func parseDateTimeFormat(str string, loc *time.Location) (time.Time, bool) {
 	// Handle AM/PM — check if rest ends with AM or PM (possibly attached to time)
 	ampm := ""
 	restLower := strings.ToLower(rest)
-	if strings.HasSuffix(restLower, "am") || strings.HasSuffix(restLower, "pm") {
+	if strings.HasSuffix(restLower, "a.m.") || strings.HasSuffix(restLower, "p.m.") {
+		// Dot notation: "a.m." or "p.m."
+		ampm = string(restLower[len(restLower)-4]) + "m" // extract "a" or "p" + "m"
+		rest = strings.TrimSpace(rest[:len(rest)-4])
+	} else if strings.HasSuffix(restLower, "am") || strings.HasSuffix(restLower, "pm") {
 		ampm = restLower[len(restLower)-2:]
 		rest = strings.TrimSpace(rest[:len(rest)-2])
 	} else {
@@ -244,8 +249,18 @@ func parseYearMonthFormat(str string, loc *time.Location) (time.Time, bool) {
 	}
 
 	year, _ := strconv.Atoi(parts[0])
-	month, _ := strconv.Atoi(parts[1])
+	dayOrMonth, _ := strconv.Atoi(parts[1])
 
+	// ISO ordinal date: YYYY-DDD (3 digits, day of year 001-366)
+	if len(parts[1]) == 3 && dayOrMonth >= 1 && dayOrMonth <= 366 {
+		t := time.Date(year, 1, 1, 0, 0, 0, 0, loc).AddDate(0, 0, dayOrMonth-1)
+		if t.Year() == year { // ensure doy didn't overflow into next year
+			return t, true
+		}
+		return time.Time{}, false
+	}
+
+	month := dayOrMonth
 	if month < 1 || month > 12 {
 		return time.Time{}, false
 	}

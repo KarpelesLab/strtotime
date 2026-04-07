@@ -4,6 +4,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 // TestPHPInvalidInputs tests inputs that should cause errors just like in PHP's strtotime()
@@ -45,7 +46,9 @@ func TestPHPInvalidInputs(t *testing.T) {
 			result, err := StrToTime(test.input)
 			if err == nil {
 				t.Errorf("Expected error for input '%s', but got result: %v", test.input, result)
+				return
 			}
+			phpVerifyFail(t, test.input, time.Time{}, time.UTC)
 		})
 	}
 }

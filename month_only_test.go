@@ -47,6 +47,7 @@ func TestMonthOnly(t *testing.T) {
 			}
 
 			t.Logf("Successfully parsed %q => %s", test.input, result.Format("2006-01-02 15:04:05"))
+			phpVerify(t, test.input, result, time.Time{}, nil)
 		})
 	}
 }

@@ -75,6 +75,7 @@ func TestIANATimezoneNamesInDateStrings(t *testing.T) {
 			if result.IsZero() {
 				t.Errorf("StrToTime(%q) returned zero time", s)
 			}
+			phpVerify(t, s, result, base, time.UTC)
 		})
 	}
 }

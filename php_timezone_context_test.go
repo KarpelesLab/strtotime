@@ -67,6 +67,7 @@ func TestPHPTimezoneContext(t *testing.T) {
 						resultZone, resultOff, expectedZone, expectedOff)
 				}
 			}
+			phpVerify(t, tt.input, result, tt.base, tt.tz)
 		})
 	}
 }
@@ -97,6 +98,7 @@ func TestPHPDSTRelativeArithmetic(t *testing.T) {
 				t.Errorf("StrToTime(%q) date = %s, want %s (full: %s)",
 					tt.input, gotDate, tt.wantDate, result)
 			}
+			phpVerify(t, tt.input, result, time.Time{}, tt.tz)
 		})
 	}
 }
@@ -128,6 +130,7 @@ func TestPHPTimezoneAbbrevInContext(t *testing.T) {
 				t.Errorf("StrToTime(%q) zone = %s, want %s (full: %s)",
 					tt.input, gotZone, tt.wantZone, result)
 			}
+			phpVerify(t, tt.input, result, time.Time{}, tt.tz)
 		})
 	}
 }

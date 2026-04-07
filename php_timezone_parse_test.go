@@ -44,6 +44,7 @@ func TestPHPTimezoneParsing(t *testing.T) {
 				t.Errorf("StrToTime(%q) = %v (unix=%d), want %v (unix=%d)",
 					tt.input, result, result.Unix(), tt.expected, tt.expected.Unix())
 			}
+			phpVerify(t, tt.input, result, time.Time{}, time.UTC)
 		})
 	}
 }

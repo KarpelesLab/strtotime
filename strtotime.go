@@ -267,27 +267,21 @@ nextFormat:
 		return t, nil
 	}
 
-	// Check if this is a compound expression (contains + or - in the middle)
-	if isCompoundExpression(str) {
-		return parseCompoundExpression(str, now, opts)
-	}
-
-	// Check if this is an ordinal date: "26th Nov"
-	if result, ok := parseOrdinalDate(str, now, loc); ok {
-		return result, nil
-	}
-
 	// Try stripping leading day-of-week name and reparsing the rest
+	// Must come before isCompoundExpression to avoid "Fri 2017-01-06" being
+	// split on "-" as a compound expression.
 	// Handles: "Sun 2017-01-01", "Fri Aug 20 1993 23:59:59", etc.
 	{
 		stripped := false
 		var rest string
+		prefixDayNum := -1
 		// Try full weekday names first (must check before 3-letter to avoid partial match)
 		for _, name := range []string{"sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"} {
 			if strings.HasPrefix(str, name) && len(str) > len(name) {
 				r := strings.TrimLeft(str[len(name):], ", ")
 				if len(r) > 0 {
 					rest = r
+					prefixDayNum = getDayOfWeek(name)
 					stripped = true
 					break
 				}
@@ -296,10 +290,12 @@ nextFormat:
 		// Try 3-letter abbreviations
 		if !stripped && len(str) > 3 {
 			prefix := str[:3]
-			if getDayOfWeek(prefix) >= 0 {
+			dn := getDayOfWeek(prefix)
+			if dn >= 0 {
 				r := strings.TrimLeft(str[3:], ", ")
 				if len(r) > 0 {
 					rest = r
+					prefixDayNum = dn
 					stripped = true
 				}
 			}
@@ -308,12 +304,31 @@ nextFormat:
 			// Don't strip if rest is "next/last week" — the token parser
 			// handles "weekday next week [time]" as a unit (bug72719)
 			restTrimmed := strings.TrimSpace(rest)
-			if strings.HasPrefix(restTrimmed, "next ") || strings.HasPrefix(restTrimmed, "last ") {
+			if strings.HasPrefix(restTrimmed, "next ") || strings.HasPrefix(restTrimmed, "last ") || strings.HasPrefix(restTrimmed, "this ") {
 				// Let the token parser handle it
 			} else if t, err := StrToTime(rest, opts...); err == nil {
+				// PHP behavior: if the weekday prefix doesn't match the
+				// parsed date, advance to the next matching weekday
+				if prefixDayNum >= 0 && int(t.Weekday()) != prefixDayNum {
+					daysUntil := (prefixDayNum - int(t.Weekday()) + 7) % 7
+					if daysUntil == 0 {
+						daysUntil = 7
+					}
+					t = t.AddDate(0, 0, daysUntil)
+				}
 				return t, nil
 			}
 		}
+	}
+
+	// Check if this is a compound expression (contains + or - in the middle)
+	if isCompoundExpression(str) {
+		return parseCompoundExpression(str, now, opts)
+	}
+
+	// Check if this is an ordinal date: "26th Nov"
+	if result, ok := parseOrdinalDate(str, now, loc); ok {
+		return result, nil
 	}
 
 	// Tokenize the input string
@@ -923,9 +938,9 @@ func (p *Parser) applyTimeUnitOffset(amount int, unitStr string) (time.Time, err
 
 	switch unit {
 	case UnitDay:
-		return p.result.AddDate(0, 0, amount), nil
+		return addDaysPHP(p.result, amount), nil
 	case UnitWeek:
-		return p.result.AddDate(0, 0, amount*7), nil
+		return addDaysPHP(p.result, amount*7), nil
 	case UnitWeekDay:
 		return addWeekdays(p.result, amount), nil
 	case UnitMonth:
@@ -933,14 +948,53 @@ func (p *Parser) applyTimeUnitOffset(amount int, unitStr string) (time.Time, err
 	case UnitYear:
 		return p.result.AddDate(amount, 0, 0), nil
 	case UnitHour:
-		return p.result.Add(time.Duration(amount) * time.Hour), nil
+		// PHP uses wall-clock arithmetic for hours (important for DST transitions)
+		y, m, d := p.result.Date()
+		h, mi, s := p.result.Clock()
+		return time.Date(y, m, d, h+amount, mi, s, p.result.Nanosecond(), p.result.Location()), nil
 	case UnitMinute:
-		return p.result.Add(time.Duration(amount) * time.Minute), nil
+		y, m, d := p.result.Date()
+		h, mi, s := p.result.Clock()
+		return time.Date(y, m, d, h, mi+amount, s, p.result.Nanosecond(), p.result.Location()), nil
 	case UnitSecond:
-		return p.result.Add(time.Duration(amount) * time.Second), nil
+		y, m, d := p.result.Date()
+		h, mi, s := p.result.Clock()
+		return time.Date(y, m, d, h, mi, s+amount, p.result.Nanosecond(), p.result.Location()), nil
 	default:
 		return time.Time{}, fmt.Errorf("%w: %s", ErrInvalidTimeUnit, unitStr)
 	}
+}
+
+// fixDSTGap adjusts a time that fell into a DST spring-forward gap.
+// When time.Date produces a result on the wrong day (Go falls backward),
+// this shifts forward to match PHP's behavior (which falls forward).
+func fixDSTGap(t time.Time, wantYear int, wantMonth time.Month, wantDay int) time.Time {
+	if t.Year() == wantYear && t.Month() == wantMonth && t.Day() == wantDay {
+		return t
+	}
+	// DST gap: shift forward by 1 hour until we land on the right day
+	for i := 0; i < 4; i++ {
+		t = t.Add(time.Hour)
+		if t.Day() == wantDay && t.Month() == wantMonth && t.Year() == wantYear {
+			return t
+		}
+	}
+	return t // give up after 4 hours
+}
+
+// addDaysPHP adds N calendar days using PHP-compatible DST handling.
+// It preserves wall-clock time (like Go's AddDate) but when the result
+// falls in a DST gap (non-existent local time), it shifts forward past
+// the gap instead of backward (which is what Go's AddDate does).
+func addDaysPHP(t time.Time, n int) time.Time {
+	result := t.AddDate(0, 0, n)
+	// Compute the expected date in UTC to avoid DST-related day shifts
+	wantUTC := time.Date(t.Year(), t.Month(), t.Day()+n, 12, 0, 0, 0, time.UTC)
+	if result.Year() != wantUTC.Year() || result.Month() != wantUTC.Month() || result.Day() != wantUTC.Day() {
+		// DST gap: AddDate landed on wrong day. Use duration-based add instead.
+		return t.Add(time.Duration(n) * 24 * time.Hour)
+	}
+	return result
 }
 
 // addWeekdays adds N business days (Mon-Fri) to the given time.
@@ -948,6 +1002,13 @@ func (p *Parser) applyTimeUnitOffset(amount int, unitStr string) (time.Time, err
 // then continue adding remaining weekdays.
 func addWeekdays(t time.Time, n int) time.Time {
 	if n == 0 {
+		// PHP behavior: 0 weekdays from a weekend snaps to next Monday
+		if t.Weekday() == time.Saturday {
+			return t.AddDate(0, 0, 2)
+		}
+		if t.Weekday() == time.Sunday {
+			return t.AddDate(0, 0, 1)
+		}
 		return t
 	}
 
@@ -1075,6 +1136,16 @@ func (p *Parser) tryParseImplicitRelativeTime() (time.Time, bool, error) {
 	}
 
 	p.position++
+
+	// Check for "ago" keyword — negates the amount
+	savedPosAfterUnit := p.position
+	p.skipWhitespace()
+	if p.position < len(p.tokens) && p.tokens[p.position].Typ == TypeString && p.tokens[p.position].Val == "ago" {
+		amount = -amount
+		p.position++
+	} else {
+		p.position = savedPosAfterUnit
+	}
 
 	// Process the unit by calling the common helper function
 	result, err := p.applyTimeUnitOffset(amount, unitToken.Val)
@@ -1461,10 +1532,10 @@ func (p *Parser) tryParseBareWeekday() (time.Time, bool, error) {
 	p.position++
 	p.skipWhitespace()
 
-	// Check for "next/last week" after weekday
+	// Check for "next/last/this week" after weekday
 	if p.position < len(p.tokens) && p.tokens[p.position].Typ == TypeString {
 		direction := p.tokens[p.position].Val
-		if direction == DirectionNext || direction == DirectionLast {
+		if direction == DirectionNext || direction == DirectionLast || direction == "this" {
 			savedPos := p.position
 			p.position++
 			p.skipWhitespace()
@@ -1473,13 +1544,15 @@ func (p *Parser) tryParseBareWeekday() (time.Time, bool, error) {
 				p.tokens[p.position].Val == UnitWeek {
 				p.position++
 
-				// Calculate: find the Monday of next/last week, then offset to target weekday
+				// Calculate: find the Monday of next/last/this week, then offset to target weekday
 				currentDay := int(p.result.Weekday())
 				daysSinceMonday := (currentDay + 6) % 7
 
 				var monday time.Time
 				if direction == DirectionNext {
 					monday = p.result.AddDate(0, 0, 7-daysSinceMonday)
+				} else if direction == "this" {
+					monday = p.result.AddDate(0, 0, -daysSinceMonday)
 				} else {
 					monday = p.result.AddDate(0, 0, -(daysSinceMonday + 7))
 				}
@@ -1540,12 +1613,9 @@ func (p *Parser) tryParseBareWeekday() (time.Time, bool, error) {
 		}
 	}
 
-	// Bare weekday name - find next occurrence (PHP behavior)
+	// Bare weekday name — PHP returns same day if base matches, else next occurrence
 	currentDay := int(p.result.Weekday())
 	daysUntil := (dayNum - currentDay + 7) % 7
-	if daysUntil == 0 {
-		daysUntil = 7
-	}
 	nextDay := p.result.AddDate(0, 0, daysUntil)
 	year, month, day := nextDay.Date()
 

@@ -39,9 +39,9 @@ var timezoneAbbreviations = map[string]*time.Location{
 	"aedt": time.FixedZone("AEDT", 11*3600),      // Australian Eastern Daylight Time (UTC+11)
 
 	// Asian time zones — use fixed offsets so abbreviations are preserved
-	"jst": time.FixedZone("JST", 9*3600),        // Japan Standard Time (UTC+9)
-	"ct":  time.FixedZone("CT", 8*3600),          // China Standard Time (UTC+8)
-	"ist": time.FixedZone("IST", 5*3600+30*60),  // Indian Standard Time (UTC+5:30)
+	"jst": time.FixedZone("JST", 9*3600),       // Japan Standard Time (UTC+9)
+	"ct":  time.FixedZone("CT", 8*3600),        // China Standard Time (UTC+8)
+	"ist": time.FixedZone("IST", 5*3600+30*60), // Indian Standard Time (UTC+5:30)
 
 	// Other common time zones
 	"utc": time.UTC, // Universal Coordinated Time

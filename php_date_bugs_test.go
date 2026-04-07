@@ -45,7 +45,7 @@ func TestPHPDateBugs(t *testing.T) {
 		{"bug43452-3rd-thu", "third Thursday Nov 2007",
 			time.Date(2007, 11, 22, 0, 0, 0, 0, time.UTC)},
 		{"bug43452-last-thu", "last Thursday Nov 2007",
-			time.Date(2007, 11, 29, 0, 0, 0, 0, time.UTC)},
+			time.Date(2007, 10, 25, 0, 0, 0, 0, time.UTC)},
 
 		// bug45081: 12-hour time with AM/PM
 		{"bug45081-12am", "11-MAY-1988 12:00:00AM",
@@ -115,6 +115,7 @@ func TestPHPDateBugs(t *testing.T) {
 				t.Errorf("StrToTime(%q) = %v (unix=%d), want %v (unix=%d)",
 					tt.input, result, result.Unix(), tt.expected, tt.expected.Unix())
 			}
+			phpVerify(t, tt.input, result, time.Time{}, time.UTC)
 		})
 	}
 }
@@ -183,6 +184,10 @@ func TestPHPDateFormatsRegression(t *testing.T) {
 			}
 			if !tt.wantErr && err != nil {
 				t.Errorf("StrToTime(%q) unexpected error: %v", tt.input, err)
+			}
+			if !tt.wantErr && err == nil {
+				result, _ := StrToTime(tt.input, InTZ(time.UTC))
+				phpVerify(t, tt.input, result, time.Time{}, time.UTC)
 			}
 		})
 	}

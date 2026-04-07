@@ -97,6 +97,7 @@ func TestISO8601DateTime(t *testing.T) {
 				t.Errorf("For '%s': expected nanos %d, got %d",
 					test.input, test.expected.Nanosecond(), result.Nanosecond())
 			}
+			phpVerify(t, test.input, result, time.Time{}, time.UTC)
 		})
 	}
 }
@@ -189,6 +190,7 @@ func TestISOWeekDate(t *testing.T) {
 					test.expected.Format("2006-01-02 (Monday)"),
 					result.Format("2006-01-02 (Monday)"))
 			}
+			phpVerify(t, test.input, result, time.Time{}, time.UTC)
 		})
 	}
 }
@@ -236,6 +238,7 @@ func TestNumericTimezoneOffset(t *testing.T) {
 					test.input, test.expectedUnix, result.Unix(),
 					result.Format(time.RFC3339))
 			}
+			phpVerify(t, test.input, result, time.Time{}, time.UTC)
 		})
 	}
 }
@@ -273,6 +276,7 @@ func TestPHPStrtotime2DateConstants(t *testing.T) {
 				t.Errorf("Round-trip failed for %s: formatted '%s', expected unix %d, got %d",
 					test.name, formatted, refUnix, result.Unix())
 			}
+			phpVerify(t, formatted, result, time.Time{}, time.UTC)
 		})
 	}
 }

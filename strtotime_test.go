@@ -233,25 +233,7 @@ func TestStrToTime(t *testing.T) {
 	}
 }
 
-// getPHPTimezone gets the default timezone that PHP is using
-func getPHPTimezone() (string, error) {
-	cmd := exec.Command("php", "-r", "echo date_default_timezone_get();")
-	output, err := cmd.Output()
-	if err != nil {
-		return "", err
-	}
-
-	// Return the timezone name
-	return strings.TrimSpace(string(output)), nil
-}
-
-// abs returns the absolute value of x.
-func abs(x int64) int64 {
-	if x < 0 {
-		return -x
-	}
-	return x
-}
+// getPHPTimezone and abs are in php_crosscheck_test.go
 
 func TestUnixTimestampFormats(t *testing.T) {
 	// Test parsing Unix timestamps with and without fractional seconds

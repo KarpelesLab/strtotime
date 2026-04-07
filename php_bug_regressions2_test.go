@@ -151,6 +151,7 @@ func TestPHPBugRegressions2(t *testing.T) {
 				t.Errorf("StrToTime(%q) = %v (unix=%d), want %v (unix=%d)",
 					tc.input, result, result.Unix(), tc.expected, tc.expected.Unix())
 			}
+			phpVerify(t, tc.input, result, tc.base, tc.base.Location())
 		})
 	}
 }
@@ -210,6 +211,7 @@ func TestPHPStrtotime3FailingFormats(t *testing.T) {
 					tc.expected.Format("Mon, 02 Jan 2006 15:04:05 -0700"),
 					tc.expected.Unix())
 			}
+			phpVerify(t, tc.input, result, baseTime, lisbon)
 		})
 	}
 }
@@ -281,6 +283,7 @@ func TestPHPStrtotimeBasicWordOrdinals(t *testing.T) {
 					tc.expected.Format("2006-01-02"),
 					tc.expected.Unix())
 			}
+			phpVerify(t, tc.input, result, time.Time{}, time.UTC)
 		})
 	}
 }
@@ -348,6 +351,7 @@ func TestPHPStrtotime2DateFormats(t *testing.T) {
 				t.Errorf("StrToTime(%q) = unix %d (%v), want unix %d",
 					tc.input, result.Unix(), result, tc.expected)
 			}
+			phpVerify(t, tc.input, result, time.Time{}, time.UTC)
 		})
 	}
 }
@@ -381,6 +385,7 @@ func TestPHPBug72719WeekdayNextWeek(t *testing.T) {
 				t.Errorf("StrToTime(%q) = %v (weekday=%v), want weekday=%v",
 					tc.input, result.Format("2006-01-02"), result.Weekday(), tc.weekday)
 			}
+			phpVerify(t, tc.input, result, time.Time{}, time.UTC)
 		})
 	}
 }
@@ -466,6 +471,7 @@ func TestPHPBug61642Weekdays(t *testing.T) {
 					tc.expected.Format("2006-01-02 Mon"),
 					tc.expected.Unix())
 			}
+			phpVerify(t, tc.input, result, tc.base, time.UTC)
 		})
 	}
 }

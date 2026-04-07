@@ -346,22 +346,25 @@ func parseDayMonthYear(str string, loc *time.Location) (time.Time, bool) {
 	s := str
 
 	// Skip leading day-of-week like "Sat " or "Thursday, "
-	// Try full weekday names first, then 3-letter abbreviations
-	stripped := false
+	// Track the weekday number so we can adjust the result if needed (PHP behavior)
+	prefixDayNum := -1
 	for _, wdLen := range []int{9, 8, 7, 6, 3} { // wednesday=9, thursday=8, saturday=8, tuesday=7, monday=6, etc.
 		if len(s) >= wdLen {
 			prefix := s[:wdLen]
-			if getDayOfWeek(prefix) >= 0 {
+			dn := getDayOfWeek(prefix)
+			if dn >= 0 {
+				prefixDayNum = dn
 				s = s[wdLen:]
 				s = strings.TrimLeft(s, ", ")
-				stripped = true
 				break
 			}
 		}
 	}
-	if !stripped && len(s) >= 3 {
+	if prefixDayNum < 0 && len(s) >= 3 {
 		prefix := s[:3]
-		if getDayOfWeek(prefix) >= 0 {
+		dn := getDayOfWeek(prefix)
+		if dn >= 0 {
+			prefixDayNum = dn
 			s = s[3:]
 			s = strings.TrimLeft(s, ", ")
 		}
@@ -474,7 +477,17 @@ func parseDayMonthYear(str string, loc *time.Location) (time.Time, bool) {
 	}
 
 	if month > 0 && day > 0 {
-		return time.Date(year, month, day, hour, minute, second, nanos, tzLoc), true
+		result := time.Date(year, month, day, hour, minute, second, nanos, tzLoc)
+		// PHP: if a weekday prefix was present and doesn't match the parsed date,
+		// advance to the next occurrence of that weekday
+		if prefixDayNum >= 0 && int(result.Weekday()) != prefixDayNum {
+			daysUntil := (prefixDayNum - int(result.Weekday()) + 7) % 7
+			if daysUntil == 0 {
+				daysUntil = 7
+			}
+			result = time.Date(result.Year(), result.Month(), result.Day()+daysUntil, hour, minute, second, nanos, tzLoc)
+		}
+		return result, true
 	}
 	return time.Time{}, false
 }
@@ -949,19 +962,25 @@ func parseDateTimeTZRelative(str string, loc *time.Location) (time.Time, bool) {
 func applyRelativeUnit(t time.Time, amount int, unit string) time.Time {
 	switch unit {
 	case UnitDay:
-		return t.AddDate(0, 0, amount)
+		return addDaysPHP(t, amount)
 	case UnitWeek:
-		return t.AddDate(0, 0, amount*7)
+		return addDaysPHP(t, amount*7)
 	case UnitMonth:
 		return t.AddDate(0, amount, 0)
 	case UnitYear:
 		return t.AddDate(amount, 0, 0)
 	case UnitHour:
-		return t.Add(time.Duration(amount) * time.Hour)
+		y, m, d := t.Date()
+		h, mi, s := t.Clock()
+		return time.Date(y, m, d, h+amount, mi, s, t.Nanosecond(), t.Location())
 	case UnitMinute:
-		return t.Add(time.Duration(amount) * time.Minute)
+		y, m, d := t.Date()
+		h, mi, s := t.Clock()
+		return time.Date(y, m, d, h, mi+amount, s, t.Nanosecond(), t.Location())
 	case UnitSecond:
-		return t.Add(time.Duration(amount) * time.Second)
+		y, m, d := t.Date()
+		h, mi, s := t.Clock()
+		return time.Date(y, m, d, h, mi, s+amount, t.Nanosecond(), t.Location())
 	}
 	return t
 }
@@ -1018,14 +1037,18 @@ func parseFrontBackOf(str string, now time.Time, loc *time.Location) (time.Time,
 		return time.Time{}, false
 	}
 
-	if ampm != "" {
-		hour = applyAMPM(hour, ampm)
-	}
-
 	year, month, day := now.Date()
 	if isFront {
+		// PHP: "front of" with pm adds 12 directly (12pm→24, 1pm→13)
+		if ampm == "pm" {
+			hour += 12
+		}
 		// "front of N" = (N-1):45
 		return time.Date(year, month, day, hour-1, 45, 0, 0, loc), true
+	}
+	// "back of" uses standard AM/PM conversion
+	if ampm != "" {
+		hour = applyAMPM(hour, ampm)
 	}
 	// "back of N" = N:15
 	return time.Date(year, month, day, hour, 15, 0, 0, loc), true
@@ -1167,6 +1190,7 @@ func parseNumberedWeekday(str string, now time.Time, loc *time.Location) (time.T
 
 	var month time.Month
 	var year int
+	relativeYears := 0 // PHP applies year offset AFTER weekday adjustment
 
 	direction := strings.ToLower(fields[idx])
 	if direction == DirectionNext || direction == DirectionLast {
@@ -1190,12 +1214,14 @@ func parseNumberedWeekday(str string, now time.Time, loc *time.Location) (time.T
 				year = ref.Year()
 			}
 		case UnitYear:
+			// PHP: weekday is resolved in the BASE year, then the year offset is
+			// applied afterward. This means the day-of-week may shift.
+			month = now.Month()
+			year = now.Year()
 			if direction == DirectionNext {
-				month = time.January
-				year = now.Year() + 1
+				relativeYears = 1
 			} else {
-				month = time.December
-				year = now.Year() - 1
+				relativeYears = -1
 			}
 		default:
 			return time.Time{}, false
@@ -1242,40 +1268,69 @@ func parseNumberedWeekday(str string, now time.Time, loc *time.Location) (time.T
 			return time.Time{}, false
 		}
 	} else {
-		// Weekday-based: find the nth occurrence of the specified day of week
-		firstOfMonth := time.Date(year, month, 1, 0, 0, 0, 0, loc)
-		firstDayOfWeek := int(firstOfMonth.Weekday())
-		daysUntilFirst := (dayOfWeek - firstDayOfWeek + 7) % 7
-
+		// Weekday-based: find the nth occurrence of the specified day of week.
+		// PHP pipeline: weekday is resolved in current year/month, THEN
+		// relative year offset is applied (which may shift the day-of-week).
 		if ordinal > 0 {
-			if isWordOrdinal && !hasOf {
-				// PHP semantics: "first Thursday Nov" = +1 week from first occurrence
-				// "first/second/third" without "of" skips forward by ordinal weeks
+			// PHP algorithm for positive ordinals:
+			// 1. Set d=1 in current month
+			// 2. Find next occurrence of target weekday (with skip for word ordinals)
+			// 3. Add (ordinal-1)*7 days
+			// 4. Later: add relative years
+			firstOfMonth := time.Date(year, month, 1, 0, 0, 0, 0, loc)
+			firstDayOfWeek := int(firstOfMonth.Weekday())
+			daysUntilFirst := (dayOfWeek - firstDayOfWeek + 7) % 7
+
+			if isWordOrdinal && !hasOf && daysUntilFirst == 0 {
+				// Word ordinals without "of" skip when target weekday matches the 1st
 				resultDay = 1 + daysUntilFirst + ordinal*7
 			} else {
-				// With "of" or numeric ordinals: Nth occurrence in the month
 				resultDay = 1 + daysUntilFirst + (ordinal-1)*7
 			}
 
 			lastDayOfMonth := daysInMonth(year, month)
-			if resultDay > lastDayOfMonth {
+			if resultDay > lastDayOfMonth && relativeYears == 0 {
 				return time.Time{}, false
 			}
 		} else if ordinal == -1 {
-			lastDayOfMonth := daysInMonth(year, month)
-			lastOfMonth := time.Date(year, month, lastDayOfMonth, 0, 0, 0, 0, loc)
-			lastDayOfWeek := int(lastOfMonth.Weekday())
-
-			if lastDayOfWeek == dayOfWeek {
-				resultDay = lastDayOfMonth
+			if hasOf {
+				// "last Thursday of November" — PHP: go to 1st of NEXT month,
+				// find target weekday, subtract 7 days.
+				// For relative year: the weekday search is in the base year.
+				nextMonth := month + 1
+				nextMonthYear := year
+				if nextMonth > 12 {
+					nextMonth = 1
+					nextMonthYear++
+				}
+				firstOfNext := time.Date(nextMonthYear, nextMonth, 1, 0, 0, 0, 0, loc)
+				firstDayOfWeek := int(firstOfNext.Weekday())
+				daysUntilTarget := (dayOfWeek - firstDayOfWeek + 7) % 7
+				// Go to first occurrence in next month, then back 7 days
+				resultDay = daysInMonth(year, month) + 1 + daysUntilTarget - 7
 			} else {
-				daysToSubtract := (lastDayOfWeek - dayOfWeek + 7) % 7
-				resultDay = lastDayOfMonth - daysToSubtract
+				// "last Thursday November" — last occurrence BEFORE the 1st of the month
+				firstOfMonth := time.Date(year, month, 1, 0, 0, 0, 0, loc)
+				firstDayOfWeek := int(firstOfMonth.Weekday())
+				daysBack := (firstDayOfWeek - dayOfWeek + 7) % 7
+				if daysBack == 0 {
+					daysBack = 7
+				}
+				resultDay = 1 - daysBack
+				return time.Date(year, month, resultDay, 0, 0, 0, 0, loc), true
 			}
 		} else {
 			return time.Time{}, false
 		}
 	}
 
-	return time.Date(year, month, resultDay, 0, 0, 0, 0, loc), true
+	// PHP: "first/last day of" preserves the base time's hour/minute/second;
+	// weekday expressions reset to midnight
+	h, mi, s := 0, 0, 0
+	if isDayOfMonth {
+		h, mi, s = now.Hour(), now.Minute(), now.Second()
+	}
+	// Apply relative year offset AFTER weekday resolution (PHP pipeline order).
+	// This means the day-of-week may shift when the year changes.
+	return time.Date(year+relativeYears, month, resultDay, h, mi, s, 0, loc), true
 }

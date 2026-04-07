@@ -83,6 +83,7 @@ func TestPHPStrtotime3_64bit(t *testing.T) {
 					result.Format("Mon, 02 Jan 2006 15:04:05 -0700"),
 					result.Unix())
 			}
+			phpVerify(t, test.input, result, baseTime, lisbon)
 		})
 	}
 
@@ -100,7 +101,9 @@ func TestPHPStrtotime3_64bit(t *testing.T) {
 			_, err := StrToTime(input, Rel(baseTime), InTZ(lisbon))
 			if err == nil {
 				t.Errorf("Expected error for '%s', but parsing succeeded", input)
+				return
 			}
+			phpVerifyFail(t, input, baseTime, lisbon)
 		})
 	}
 }
@@ -139,6 +142,7 @@ func TestPHPStrtotimeMySQL(t *testing.T) {
 					test.expected.Format(time.RFC1123Z),
 					result.Format(time.RFC1123Z))
 			}
+			phpVerify(t, test.input, result, time.Time{}, time.UTC)
 		})
 	}
 }
@@ -174,6 +178,7 @@ func TestPHPStrtotimeBasic(t *testing.T) {
 					test.expected.Format("2006-01-02"),
 					result.Format("2006-01-02"))
 			}
+			phpVerify(t, test.input, result, time.Time{}, time.UTC)
 		})
 	}
 }
@@ -184,7 +189,9 @@ func TestPHPStrtotimeBasic2(t *testing.T) {
 	_, err := StrToTime("mayy 2 2009", InTZ(time.UTC))
 	if err == nil {
 		t.Error("Expected error for misspelled month 'mayy 2 2009', but parsing succeeded")
+		return
 	}
+	phpVerifyFail(t, "mayy 2 2009", time.Time{}, time.UTC)
 }
 
 // TestPHPStrtotimeRelative tests from PHP's strtotime-relative.phpt
@@ -266,6 +273,7 @@ func TestPHPStrtotimeRelative(t *testing.T) {
 					result.Format(time.RFC3339),
 					result.Unix())
 			}
+			phpVerify(t, test.input, result, baseTime, time.UTC)
 		})
 	}
 }
@@ -307,6 +315,7 @@ func TestPHPStrtotimeOriginal(t *testing.T) {
 					result.Unix(),
 					result.Format("2006-01-02T15:04:05-0700"))
 			}
+			phpVerify(t, test.input, result, time.Time{}, oslo)
 		})
 	}
 }
@@ -336,6 +345,7 @@ func TestLargeYears(t *testing.T) {
 				t.Errorf("For '%s': expected %d-%02d-%02d, got %d-%02d-%02d",
 					test.input, test.year, test.month, test.day, y, m, d)
 			}
+			phpVerify(t, test.input, result, time.Time{}, time.UTC)
 		})
 	}
 }
@@ -367,6 +377,7 @@ func TestSmallYears(t *testing.T) {
 				t.Errorf("For '%s': expected %d-%02d-%02d, got %d-%02d-%02d",
 					test.input, test.year, test.month, test.day, y, m, d)
 			}
+			phpVerify(t, test.input, result, time.Time{}, time.UTC)
 		})
 	}
 }
@@ -396,6 +407,7 @@ func TestPHPScottish(t *testing.T) {
 				t.Errorf("For '%s': expected %02d:%02d, got %02d:%02d",
 					test.input, test.hour, test.minute, result.Hour(), result.Minute())
 			}
+			phpVerify(t, test.input, result, time.Time{}, time.UTC)
 		})
 	}
 }

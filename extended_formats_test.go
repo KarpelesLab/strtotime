@@ -35,6 +35,7 @@ func TestCompactTimestamp(t *testing.T) {
 			if !result.Equal(test.expected) {
 				t.Errorf("Expected %v, got %v", test.expected, result)
 			}
+			phpVerify(t, test.input, result, time.Time{}, time.UTC)
 		})
 	}
 }
@@ -73,6 +74,7 @@ func TestMonthNameFormat(t *testing.T) {
 			if !result.Equal(test.expected) {
 				t.Errorf("Expected %v, got %v", test.expected, result)
 			}
+			phpVerify(t, test.input, result, time.Time{}, time.UTC)
 		})
 	}
 }
@@ -103,6 +105,7 @@ func TestHTTPLogFormat(t *testing.T) {
 			if !result.Equal(test.expected) {
 				t.Errorf("Expected %v, got %v", test.expected, result)
 			}
+			phpVerify(t, test.input, result, time.Time{}, time.UTC)
 		})
 	}
 }
@@ -141,7 +144,7 @@ func TestNumberedWeekday(t *testing.T) {
 		},
 		{
 			"last Monday December 2008",
-			time.Date(2008, 12, 29, 0, 0, 0, 0, time.UTC), // Last Monday in December 2008
+			time.Date(2008, 11, 24, 0, 0, 0, 0, time.UTC), // PHP: "last Monday December" = last Mon BEFORE Dec
 		},
 	}
 
@@ -159,6 +162,7 @@ func TestNumberedWeekday(t *testing.T) {
 					test.expected.Format("2006-01-02 (Monday)"),
 					result.Format("2006-01-02 (Monday)"))
 			}
+			phpVerify(t, test.input, result, reference, time.UTC)
 		})
 	}
 }
@@ -194,16 +198,18 @@ func TestNumberedWeekdayRelative(t *testing.T) {
 			time.Date(2025, 2, 5, 0, 0, 0, 0, time.UTC),
 		},
 		{
-			// First Sunday of January 2009 = Jan 4
+			// PHP: weekday resolved in base year (2008), then year+1 applied.
+			// Dec 1 2008=Mon, next Sunday=Dec 7. +1 year → 2009-12-07 (Mon).
 			"first sunday of next year",
 			time.Date(2008, 12, 1, 0, 0, 0, 0, time.UTC),
-			time.Date(2009, 1, 4, 0, 0, 0, 0, time.UTC),
+			time.Date(2009, 12, 7, 0, 0, 0, 0, time.UTC),
 		},
 		{
-			// Last Friday of December 2008 = Dec 26
+			// PHP: weekday resolved in base year (2009 April), then year-1 applied.
+			// April 1 2009=Wed, next Fri=April 3, -7=March 27. -1 year → 2008-03-27.
 			"last friday of last year",
 			time.Date(2009, 3, 15, 0, 0, 0, 0, time.UTC),
-			time.Date(2008, 12, 26, 0, 0, 0, 0, time.UTC),
+			time.Date(2008, 3, 27, 0, 0, 0, 0, time.UTC),
 		},
 		{
 			// Third Thursday of next month (Feb 2025) = Feb 20
@@ -225,6 +231,7 @@ func TestNumberedWeekdayRelative(t *testing.T) {
 					test.expected.Format("2006-01-02 (Monday)"),
 					result.Format("2006-01-02 (Monday)"))
 			}
+			phpVerify(t, test.input, result, test.reference, time.UTC)
 		})
 	}
 }
@@ -274,6 +281,7 @@ func TestDayOfMonth(t *testing.T) {
 					test.expected.Format("2006-01-02"),
 					result.Format("2006-01-02"))
 			}
+			phpVerify(t, test.input, result, reference, time.UTC)
 		})
 	}
 }
@@ -300,14 +308,16 @@ func TestDayOfMonthRelative(t *testing.T) {
 			time.Date(2024, 2, 29, 0, 0, 0, 0, time.UTC), // leap year
 		},
 		{
+			// PHP: "next year" keeps month (June). First day of June 2026
 			"first day of next year",
 			time.Date(2025, 6, 15, 0, 0, 0, 0, time.UTC),
-			time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+			time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC),
 		},
 		{
+			// PHP: "last year" keeps month (June). Last day of June 2024
 			"last day of last year",
 			time.Date(2025, 6, 15, 0, 0, 0, 0, time.UTC),
-			time.Date(2024, 12, 31, 0, 0, 0, 0, time.UTC),
+			time.Date(2024, 6, 30, 0, 0, 0, 0, time.UTC),
 		},
 	}
 
@@ -323,6 +333,7 @@ func TestDayOfMonthRelative(t *testing.T) {
 					test.expected.Format("2006-01-02"),
 					result.Format("2006-01-02"))
 			}
+			phpVerify(t, test.input, result, test.reference, time.UTC)
 		})
 	}
 }
@@ -361,7 +372,7 @@ func TestStrToTimeWithExtendedFormats(t *testing.T) {
 		},
 		{
 			"last Monday December 2008",
-			time.Date(2008, 12, 29, 0, 0, 0, 0, time.UTC),
+			time.Date(2008, 11, 24, 0, 0, 0, 0, time.UTC),
 		},
 		{
 			"first monday of next month",
@@ -373,7 +384,7 @@ func TestStrToTimeWithExtendedFormats(t *testing.T) {
 		},
 		{
 			"first day of next month",
-			time.Date(2009, 1, 1, 0, 0, 0, 0, time.UTC),
+			time.Date(2009, 1, 1, 10, 0, 0, 0, time.UTC), // PHP: preserves base time
 		},
 		{
 			"last day of december 2008",
@@ -398,6 +409,7 @@ func TestStrToTimeWithExtendedFormats(t *testing.T) {
 					test.expected.Format("2006-01-02 15:04:05 MST"),
 					result.Format("2006-01-02 15:04:05 MST"))
 			}
+			phpVerify(t, test.input, result, reference, time.UTC)
 		})
 	}
 }

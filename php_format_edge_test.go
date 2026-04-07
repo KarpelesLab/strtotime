@@ -90,6 +90,7 @@ func TestPHPFormatEdgeCases(t *testing.T) {
 			if !result.Equal(tt.expected) {
 				t.Errorf("StrToTime(%q) = %v, want %v", tt.input, result, tt.expected)
 			}
+			phpVerify(t, tt.input, result, time.Time{}, time.UTC)
 		})
 	}
 }
