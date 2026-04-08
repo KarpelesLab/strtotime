@@ -608,12 +608,26 @@ func parseTimeBeforeDate(str string, loc *time.Location) (time.Time, bool) {
 
 	var hour, minute, second int
 
-	// Try colon-based time (19:30, 17:00:00, etc.)
+	// Try colon-based time (19:30, 17:00:00, 10:00:00 AM, etc.)
+	timeFieldEnd := 1 // index after the time fields
 	if strings.Contains(fields[0], ":") {
 		var ok bool
 		hour, minute, second, _, ok = parseFlexTime(fields[0])
 		if !ok || !IsValidTime(hour, minute, second) {
 			return time.Time{}, false
+		}
+		// Check for AM/PM after the colon time
+		if len(fields) > 1 {
+			ampm := strings.ToLower(fields[1])
+			if ampm == "am" || ampm == "pm" || ampm == "a.m." || ampm == "p.m." {
+				ampm = strings.TrimSuffix(strings.Replace(ampm, ".", "", -1), "")
+				if strings.HasPrefix(ampm, "a") {
+					hour = applyAMPM(hour, "am")
+				} else {
+					hour = applyAMPM(hour, "pm")
+				}
+				timeFieldEnd = 2
+			}
 		}
 	} else {
 		// Try bare AM/PM time: "1pm", "12am", "3am"
@@ -637,7 +651,7 @@ func parseTimeBeforeDate(str string, loc *time.Location) (time.Time, bool) {
 	}
 
 	// Try to parse the rest as a date
-	dateStr := strings.Join(fields[1:], " ")
+	dateStr := strings.Join(fields[timeFieldEnd:], " ")
 
 	// Try ISO date
 	if t, ok := parseISOFormat(dateStr, loc); ok {
@@ -859,22 +873,30 @@ func parseMonthDayTimeYear(str string, loc *time.Location) (time.Time, bool) {
 }
 
 // parseDateTimeTZRelative parses "YYYY-MM-DD TZ +N unit" or "YYYY-MM-DDThh:mm:ss+ZZZZ +N unit"
-// Handles date with timezone followed by relative time adjustment.
+// Handles date with timezone followed by one or more relative time adjustments.
+// Examples: "2004-10-31 EDT +1 hour", "2004-04-07 00:00:00 -10 day +2 hours"
 func parseDateTimeTZRelative(str string, loc *time.Location) (time.Time, bool) {
-	// Look for patterns like "2004-10-31 EDT +1 hour" or "2008-07-01T22:35:17+0200 +7 days"
-	// Strategy: find the last +/- that starts a relative expression
-	lower := str
+	// Strategy: collect relative expressions from the end, then parse the remaining date.
+	// Each relative expression is " +N unit" or " -N unit" (space + sign + number + space + unit).
+	type relExpr struct {
+		amount int
+		unit   string
+	}
+	var rels []relExpr
+	remaining := str
 
-	// Try to find a relative expression at the end: +N unit or -N unit
-	// Look backward for " +N " or " -N " pattern
-	for i := len(lower) - 1; i > 0; i-- {
-		if lower[i] == '+' || lower[i] == '-' {
-			// Check if preceded by space
-			if i > 0 && lower[i-1] == ' ' {
-				relPart := lower[i:]
-				datePart := strings.TrimSpace(lower[:i])
+	// Strip relative expressions from the end
+	for {
+		remaining = strings.TrimRight(remaining, " ")
+		if len(remaining) == 0 {
+			break
+		}
 
-				// Validate the relative part looks like "+N unit"
+		// Find the last space-preceded +/- sign
+		found := false
+		for i := len(remaining) - 1; i > 0; i-- {
+			if (remaining[i] == '+' || remaining[i] == '-') && remaining[i-1] == ' ' {
+				relPart := remaining[i:]
 				relFields := strings.Fields(relPart)
 				if len(relFields) != 2 {
 					continue
@@ -884,44 +906,53 @@ func parseDateTimeTZRelative(str string, loc *time.Location) (time.Time, bool) {
 					continue
 				}
 				unit := normalizeTimeUnit(relFields[1])
-				if unit == relFields[1] { // normalizeTimeUnit returns input if unrecognized
-					// Check more carefully
-					if unit != UnitDay && unit != UnitWeek && unit != UnitMonth && unit != UnitYear &&
-						unit != UnitHour && unit != UnitMinute && unit != UnitSecond {
-						continue
-					}
+				switch unit {
+				case UnitDay, UnitWeek, UnitWeekDay, UnitMonth, UnitYear,
+					UnitHour, UnitMinute, UnitSecond:
+					// Valid relative expression — strip it and continue
+					rels = append(rels, relExpr{amount, unit})
+					remaining = strings.TrimSpace(remaining[:i])
+					found = true
+				default:
+					continue
 				}
+				break
+			}
+		}
+		if !found {
+			break
+		}
+	}
 
-				// Try to parse the date part
-				// Try ISO 8601
-				if t, ok := parseISO8601(datePart, loc); ok {
-					return applyTimeOffset(t, amount, unit), true
-				}
-				// Try datetime with tz
-				if t, ok := parseDateTimeFormat(datePart, loc); ok {
-					return applyTimeOffset(t, amount, unit), true
-				}
-				// Try date + time + tz: "2005-07-14 22:30:41 GMT"
-				if t, ok := parseISODateTimeWithTimezone(datePart, loc); ok {
-					return applyTimeOffset(t, amount, unit), true
-				}
-				// Try date + tz (no time): "2004-10-31 EDT"
-				if t, ok := parseDateWithTZ(datePart, loc); ok {
-					return applyTimeOffset(t, amount, unit), true
-				}
-				// Try plain date
-				if t, ok := parseISOFormat(datePart, loc); ok {
-					return applyTimeOffset(t, amount, unit), true
-				}
-				// Try RFC 2822 / DD Mon YYYY format: "Mon, 08 May 2006 13:06:44 -0400"
-				if t, ok := parseDayMonthYear(datePart, loc); ok {
-					return applyTimeOffset(t, amount, unit), true
+	if len(rels) == 0 {
+		return time.Time{}, false
+	}
+
+	// Try to parse the remaining date part
+	datePart := remaining
+	var t time.Time
+	var ok bool
+
+	if t, ok = parseISO8601(datePart, loc); !ok {
+		if t, ok = parseDateTimeFormat(datePart, loc); !ok {
+			if t, ok = parseISODateTimeWithTimezone(datePart, loc); !ok {
+				if t, ok = parseDateWithTZ(datePart, loc); !ok {
+					if t, ok = parseISOFormat(datePart, loc); !ok {
+						if t, ok = parseDayMonthYear(datePart, loc); !ok {
+							return time.Time{}, false
+						}
+					}
 				}
 			}
 		}
 	}
 
-	return time.Time{}, false
+	// Apply relative expressions in reverse order (innermost first)
+	for i := len(rels) - 1; i >= 0; i-- {
+		t = applyTimeOffset(t, rels[i].amount, rels[i].unit)
+	}
+
+	return t, true
 }
 
 // parseDateWithTZ parses "YYYY-MM-DD TZname" (date + timezone without time)

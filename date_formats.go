@@ -210,7 +210,11 @@ func parseDateTimeFormat(str string, loc *time.Location) (time.Time, bool) {
 	tzRest := rest[consumed:]
 	if len(tzRest) > 0 {
 		tzStr := strings.TrimSpace(tzRest)
-		if parsed, _, ok := parseNumericTimezoneOffset(tzStr); ok {
+		if parsed, tzConsumed, ok := parseNumericTimezoneOffset(tzStr); ok {
+			// Only accept if the entire remaining string is the timezone
+			if strings.TrimSpace(tzStr[tzConsumed:]) != "" {
+				return time.Time{}, false
+			}
 			tzLoc = parsed
 		} else if len(tzStr) > 0 {
 			// Try named timezone (abbreviation or full name)

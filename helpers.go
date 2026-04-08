@@ -69,6 +69,14 @@ func addDaysPHP(t time.Time, n int) time.Time {
 		// DST gap: AddDate landed on wrong day. Use duration-based add instead.
 		return t.Add(time.Duration(n) * 24 * time.Hour)
 	}
+	// Check if DST gap shifted the wall-clock time (Go falls backward, PHP falls forward).
+	// Example: 02:30 EST +1 day across spring-forward → Go gives 01:30 EST, PHP gives 03:30 EDT.
+	// Fix: use duration-based add which crosses the gap correctly.
+	origH, origM, origS := t.Clock()
+	resH, resM, resS := result.Clock()
+	if origH != resH || origM != resM || origS != resS {
+		return t.Add(time.Duration(n) * 24 * time.Hour)
+	}
 	return result
 }
 
