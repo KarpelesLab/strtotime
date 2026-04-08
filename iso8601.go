@@ -343,7 +343,8 @@ func parseISOWeekDate(str string, loc *time.Location) (time.Time, bool) {
 		weekStr += string(rest[i])
 		i++
 	}
-	if len(weekStr) == 0 {
+	if len(weekStr) == 0 || len(weekStr) < 2 {
+		// PHP requires 2-digit week numbers
 		return time.Time{}, false
 	}
 	week, _ := strconv.Atoi(weekStr)
@@ -351,16 +352,34 @@ func parseISOWeekDate(str string, loc *time.Location) (time.Time, bool) {
 		return time.Time{}, false
 	}
 
-	// Parse optional day of week (1=Monday, 7=Sunday)
+	// Parse optional day of week (0=Sunday before, 1=Monday, 7=Sunday)
 	day := 1 // Default to Monday
 	rest = rest[i:]
 	if len(rest) > 0 {
 		if rest[0] == '-' {
 			rest = rest[1:]
 		}
-		if len(rest) >= 1 && rest[0] >= '1' && rest[0] <= '7' {
+		if len(rest) >= 1 && rest[0] >= '0' && rest[0] <= '7' {
 			day = int(rest[0] - '0')
 			rest = rest[1:]
+		} else if len(rest) >= 1 && rest[0] >= '0' && rest[0] <= '9' {
+			// Day >= 8: PHP treats as timezone offset (e.g., "-8" → UTC-8)
+			h := int(rest[0] - '0')
+			rest = rest[1:]
+			if len(rest) > 0 {
+				return time.Time{}, false
+			}
+			// Compute the Monday of the target week using UTC for calendar math
+			jan4 := time.Date(year, 1, 4, 0, 0, 0, 0, time.UTC)
+			isoWeekday := int(jan4.Weekday())
+			if isoWeekday == 0 {
+				isoWeekday = 7
+			}
+			week1Monday := jan4.AddDate(0, 0, -(isoWeekday - 1))
+			target := week1Monday.AddDate(0, 0, (week-1)*7)
+			// Create midnight in the offset timezone (not just relabel)
+			tzLoc := time.FixedZone("", -h*3600)
+			return time.Date(target.Year(), target.Month(), target.Day(), 0, 0, 0, 0, tzLoc), true
 		}
 		// Reject any remaining content
 		if len(rest) > 0 {

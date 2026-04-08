@@ -11,7 +11,9 @@ import (
 )
 
 // TestCSV loads test cases from testdata/strtotime_tests.csv and verifies
-// each one against StrToTime and optionally PHP's strtotime.
+// each one against StrToTime. For PHP cross-validation, run:
+//
+//	php testdata/check_csv_values.php
 func TestCSV(t *testing.T) {
 	records := loadCSV(t, "testdata/strtotime_tests.csv")
 
@@ -55,7 +57,6 @@ func TestCSV(t *testing.T) {
 					expectedUnix, time.Unix(expectedUnix, 0).UTC().Format("2006-01-02 15:04:05"),
 					result.Unix()-expectedUnix)
 			}
-			phpVerify(t, input, result, base, loc)
 		})
 	}
 }
@@ -95,7 +96,6 @@ func TestCSVInvalid(t *testing.T) {
 			if perr == nil {
 				t.Errorf("StrToTime(%q) should have returned error", input)
 			}
-			phpVerifyFail(t, input, base, loc)
 		})
 	}
 }

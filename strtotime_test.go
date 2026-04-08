@@ -233,7 +233,21 @@ func TestStrToTime(t *testing.T) {
 	}
 }
 
-// getPHPTimezone and abs are in php_crosscheck_test.go
+func getPHPTimezone() (string, error) {
+	cmd := exec.Command("php", "-r", "echo date_default_timezone_get();")
+	output, err := cmd.Output()
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(output)), nil
+}
+
+func abs(x int64) int64 {
+	if x < 0 {
+		return -x
+	}
+	return x
+}
 
 func TestUnixTimestampFormats(t *testing.T) {
 	// Test parsing Unix timestamps with and without fractional seconds
@@ -242,13 +256,11 @@ func TestUnixTimestampFormats(t *testing.T) {
 		expectedSeconds int64
 		expectedNanos   int
 	}{
-		{"@1672531200", 1672531200, 0},                   // 2023-01-01 00:00:00 UTC
-		{"@1672531200.5", 1672531200, 500000000},         // With .5 seconds
-		{"@1672531200.123", 1672531200, 123000000},       // With milliseconds
-		{"@1672531200.123456", 1672531200, 123456000},    // With microseconds
-		{"@1672531200.123456789", 1672531200, 123456789}, // With nanoseconds
-		{"@1672531200.000001", 1672531200, 1000},         // Very small fraction
-		{"@1672531200.999999999", 1672531200, 999999999}, // Maximum precision
+		{"@1672531200", 1672531200, 0},                // 2023-01-01 00:00:00 UTC
+		{"@1672531200.5", 1672531200, 500000000},      // With .5 seconds
+		{"@1672531200.123", 1672531200, 123000000},    // With milliseconds
+		{"@1672531200.123456", 1672531200, 123456000}, // With microseconds (max PHP supports)
+		{"@1672531200.000001", 1672531200, 1000},      // Very small fraction
 	}
 
 	for _, test := range tests {

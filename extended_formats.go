@@ -342,7 +342,7 @@ func getMonthByNameFlex(name string) (time.Month, bool) {
 // Examples: "11 Oct 2005", "11-MAY-1988 12:00:00AM", "11Oct2005",
 //
 //	"Sat 26th Nov 2005 18:18", "Thu, 20 Nov 2003 16:20:42 +0000"
-func parseDayMonthYear(str string, loc *time.Location) (time.Time, bool) {
+func parseDayMonthYear(str string, now time.Time, loc *time.Location) (time.Time, bool) {
 	// Skip leading day-of-week like "Sat " or "Thursday, "
 	s, prefixDayNum, _ := stripWeekdayPrefix(str)
 	if prefixDayNum < 0 {
@@ -353,7 +353,7 @@ func parseDayMonthYear(str string, loc *time.Location) (time.Time, bool) {
 	fields := strings.Fields(s)
 	if len(fields) < 2 {
 		// Try compact DDMonYYYY (no spaces)
-		return parseDayMonthYearCompact(s, loc)
+		return parseDayMonthYearCompact(s, now, loc)
 	}
 
 	idx := 0
@@ -374,7 +374,7 @@ func parseDayMonthYear(str string, loc *time.Location) (time.Time, bool) {
 	day, err := strconv.Atoi(dayStr)
 	if err != nil || day < 1 || day > 31 {
 		// Day might be fused with month: "11Oct" in "11Oct 2005"
-		return parseDayMonthYearCompact(s, loc)
+		return parseDayMonthYearCompact(s, now, loc)
 	}
 	idx++
 
@@ -471,8 +471,8 @@ func parseDayMonthYear(str string, loc *time.Location) (time.Time, bool) {
 	return time.Time{}, false
 }
 
-// parseDayMonthYearCompact parses "DDMonYYYY", "DDMon YYYY", or "DDMon" (no year = current year)
-func parseDayMonthYearCompact(str string, loc *time.Location) (time.Time, bool) {
+// parseDayMonthYearCompact parses "DDMonYYYY", "DDMon YYYY", or "DDMon" (no year = base year)
+func parseDayMonthYearCompact(str string, now time.Time, loc *time.Location) (time.Time, bool) {
 	s := strings.TrimSpace(str)
 	if len(s) < 4 { // at least DMon
 		return time.Time{}, false
@@ -505,11 +505,11 @@ func parseDayMonthYearCompact(str string, loc *time.Location) (time.Time, bool) 
 	// Rest may have optional space then year, then optional time
 	rest := strings.TrimSpace(s[monthEnd:])
 	if rest == "" {
-		// No year — default to current year (e.g., "11Oct")
+		// No year — default to base year (e.g., "11Oct")
 		if day < 1 || day > 31 {
 			return time.Time{}, false
 		}
-		return time.Date(time.Now().Year(), month, day, 0, 0, 0, 0, loc), true
+		return time.Date(now.Year(), month, day, 0, 0, 0, 0, loc), true
 	}
 	fields := strings.Fields(rest)
 	if len(fields) == 0 {
@@ -938,7 +938,7 @@ func parseDateTimeTZRelative(str string, loc *time.Location) (time.Time, bool) {
 			if t, ok = parseISODateTimeWithTimezone(datePart, loc); !ok {
 				if t, ok = parseDateWithTZ(datePart, loc); !ok {
 					if t, ok = parseISOFormat(datePart, loc); !ok {
-						if t, ok = parseDayMonthYear(datePart, loc); !ok {
+						if t, ok = parseDayMonthYear(datePart, time.Now(), loc); !ok {
 							return time.Time{}, false
 						}
 					}
@@ -1099,6 +1099,10 @@ func parseNumberedWeekday(str string, now time.Time, loc *time.Location) (time.T
 	dayOfWeek := getDayOfWeek(fields[idx])
 	if dayOfWeek < 0 {
 		if strings.ToLower(fields[idx]) == "day" {
+			// PHP only supports "first day of" and "last day of"
+			if ordinal != 1 && ordinal != -1 {
+				return time.Time{}, false
+			}
 			isDayOfMonth = true
 		} else {
 			return time.Time{}, false
@@ -1218,10 +1222,11 @@ func parseNumberedWeekday(str string, now time.Time, loc *time.Location) (time.T
 				resultDay = 1 + daysUntilFirst + (ordinal-1)*7
 			}
 
-			lastDayOfMonth := daysInMonth(year, month)
-			if resultDay > lastDayOfMonth && relativeYears == 0 {
-				return time.Time{}, false
-			}
+			// When a relative year offset is involved, allow overflow
+			// (day-of-week may shift when the year changes).
+			// Also allow overflow for all ordinal expressions —
+			// PHP permits e.g. "sixth Monday of January" which overflows into February.
+			// Go's time.Date naturally handles day overflow.
 		} else if ordinal == -1 {
 			if hasOf {
 				// "last Thursday of November" — PHP: go to 1st of NEXT month,

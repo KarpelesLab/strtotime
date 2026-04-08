@@ -23,6 +23,7 @@ var formatParsers = []formatParser{
 	wrapLoc(parseDateTimeFormat),              // "YYYY-MM-DD HH:MM:SS"
 	wrapLoc(parseWithTimezone),                // various
 	wrapLoc(parseISOFormat),                   // "YYYY-MM-DD"
+	guardDigit(wrapNow(parseLargeYearAsTime)), // "10000-01-01" (compact time + month-day)
 	guardDigit(wrapLoc(parseYearMonthFormat)), // "YYYY-MM"
 	guardDigit(wrapLoc(parseSlashFormat)),     // "YYYY/MM/DD"
 	guardDigit(wrapLoc(parseUSFormat)),        // "MM/DD/YYYY"
@@ -34,7 +35,7 @@ var formatParsers = []formatParser{
 	guardDigit(wrapLoc(parseHTTPLogFormat)),    // "10/Oct/2000:..."
 	wrapLoc(parseDateTimeTZRelative),           // "2004-10-31 EDT +1 hour"
 	wrapLoc(parseDateWithTZ),                   // "2014-01-01 Asia/Tokyo"
-	wrapLoc(parseDayMonthYear),                 // "26th Nov 2005"
+	wrapNow(parseDayMonthYear),                 // "26th Nov 2005"
 	wrapLoc(parseMonthYearOnly),                // "Oct 2001"
 	guardDigit(wrapLoc(parseTimeBeforeDate)),   // "19:30 Dec 17 2005"
 	wrapLoc(parseMonthDayTimeYear),             // "Dec 17 19:30 2005"
@@ -151,7 +152,12 @@ func tryParseUnixTimestamp(str string, loc *time.Location) (time.Time, bool) {
 		if err != nil {
 			return time.Time{}, false
 		}
-		fracPart, err := strconv.ParseFloat("0."+timestamp[idx+1:], 64)
+		fracStr := timestamp[idx+1:]
+		// PHP rejects fractional seconds with more than 6 digits
+		if len(fracStr) > 6 {
+			return time.Time{}, false
+		}
+		fracPart, err := strconv.ParseFloat("0."+fracStr, 64)
 		if err != nil {
 			fracPart = 0.0
 		}
@@ -284,11 +290,12 @@ func StrToTime(str string, opts ...Option) (time.Time, error) {
 
 // Parser represents a token stream parser for time expressions
 type Parser struct {
-	tokens   []Token
-	position int
-	result   time.Time
-	loc      *time.Location
-	tzFound  bool // Flag to indicate if a timezone was parsed from the input
+	tokens     []Token
+	position   int
+	result     time.Time
+	loc        *time.Location
+	tzFound    bool // Flag to indicate if a timezone was parsed from the input
+	monthFound bool // Flag to indicate if a month name was parsed (affects 4-digit number interpretation)
 }
 
 // Parse processes the token stream and returns a time.Time result
@@ -426,6 +433,7 @@ func (p *Parser) Parse() (time.Time, error) {
 					return time.Time{}, err
 				}
 				p.result = t
+				p.monthFound = true
 				parsed = true
 			}
 		}
@@ -437,6 +445,7 @@ func (p *Parser) Parse() (time.Time, error) {
 					return time.Time{}, err
 				}
 				p.result = t
+				p.monthFound = true
 				parsed = true
 			}
 		}
@@ -601,6 +610,10 @@ func (p *Parser) tryParseStandardDate() (time.Time, bool, error) {
 		// ISO format: YYYY-MM-DD or D-M-YYYY
 		if len(p.tokens[p.position].Val) >= 4 {
 			year, month, day = firstNum, secondNum, thirdNum
+			// PHP doesn't support years > 9999 in YYYY-MM-DD format
+			if year > 9999 {
+				return time.Time{}, false, nil
+			}
 		} else if len(p.tokens[p.position+4].Val) >= 4 {
 			// D-M-YYYY (European style with dashes)
 			day, month, year = firstNum, secondNum, thirdNum
@@ -1552,8 +1565,8 @@ func (p *Parser) tryParseYearOnly() (time.Time, bool, error) {
 	if len(val) != 4 {
 		return time.Time{}, false, nil
 	}
-	year, err := strconv.Atoi(val)
-	if err != nil || year < 1 {
+	num, err := strconv.Atoi(val)
+	if err != nil || num < 1 {
 		return time.Time{}, false, nil
 	}
 
@@ -1567,7 +1580,20 @@ func (p *Parser) tryParseYearOnly() (time.Time, bool, error) {
 	}
 
 	p.position++
-	return time.Date(year, p.result.Month(), p.result.Day(), p.result.Hour(), p.result.Minute(), p.result.Second(), p.result.Nanosecond(), p.loc), true, nil
+
+	// PHP behavior: when a month name has already been parsed and the 4-digit number
+	// forms a valid military time (HHMM with HH <= 23), treat it as time, not year.
+	// Example: "March 1 eighth day 2009" → 2009 is military time 20:09, not year.
+	if p.monthFound {
+		hour := num / 100
+		minute := num % 100
+		if hour <= 23 && minute <= 59 {
+			year, month, day := p.result.Date()
+			return time.Date(year, month, day, hour, minute, 0, 0, p.loc), true, nil
+		}
+	}
+
+	return time.Date(num, p.result.Month(), p.result.Day(), p.result.Hour(), p.result.Minute(), p.result.Second(), p.result.Nanosecond(), p.loc), true, nil
 }
 
 // ordinalWordToNumber converts ordinal words to numbers

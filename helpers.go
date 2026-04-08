@@ -122,7 +122,7 @@ func parseOrdinalPrefix(fields []string, idx int) (ordinal int, isWord bool, nex
 
 	// Try numeric ordinal
 	if n, err := strconv.Atoi(fields[idx]); err == nil {
-		if n <= 0 || n > 5 {
+		if n <= 0 || n > 53 {
 			return 0, false, idx, false
 		}
 		return n, false, idx + 1, true
@@ -140,6 +140,20 @@ func parseOrdinalPrefix(fields []string, idx int) (ordinal int, isWord bool, nex
 		return 4, true, idx + 1, true
 	case "fifth", "5th":
 		return 5, true, idx + 1, true
+	case "sixth", "6th":
+		return 6, true, idx + 1, true
+	case "seventh", "7th":
+		return 7, true, idx + 1, true
+	case "eighth", "8th":
+		return 8, true, idx + 1, true
+	case "ninth", "9th":
+		return 9, true, idx + 1, true
+	case "tenth", "10th":
+		return 10, true, idx + 1, true
+	case "eleventh", "11th":
+		return 11, true, idx + 1, true
+	case "twelfth", "12th":
+		return 12, true, idx + 1, true
 	case "last":
 		return -1, false, idx + 1, true
 	}
@@ -176,4 +190,60 @@ func stripWeekdayPrefix(s string) (rest string, dayNum int, stripped bool) {
 		}
 	}
 	return s, -1, false
+}
+
+// phpEpochDays computes the number of days from the Unix epoch (1970-01-01)
+// using PHP's timelib algorithm (Hinnant's civil_from_days). This uses int64
+// arithmetic which may overflow for extreme years, matching PHP's behavior.
+func phpEpochDays(year, month, day int64) int64 {
+	const (
+		yearsPerEra       = int64(400)
+		daysPerYear       = int64(365)
+		daysPerEra        = int64(146097)
+		hinnantEpochShift = int64(719468)
+	)
+
+	y := year
+	if month <= 2 {
+		y--
+	}
+
+	var era int64
+	if y >= 0 {
+		era = y / yearsPerEra
+	} else {
+		era = (y - 399) / yearsPerEra
+	}
+
+	yearOfEra := y - era*yearsPerEra
+
+	var m int64
+	if month > 2 {
+		m = month - 3
+	} else {
+		m = month + 9
+	}
+	dayOfYear := (153*m+2)/5 + day - 1
+	dayOfEra := yearOfEra*daysPerYear + yearOfEra/4 - yearOfEra/100 + dayOfYear
+
+	return era*daysPerEra + dayOfEra - hinnantEpochShift
+}
+
+// phpUnixTimestamp computes a Unix timestamp using PHP-compatible int64 arithmetic.
+// For extreme years this will overflow the same way PHP does, producing matching values.
+func phpUnixTimestamp(year int, month, day, hour, minute, second int) int64 {
+	days := phpEpochDays(int64(year), int64(month), int64(day))
+	return days*86400 + int64(hour)*3600 + int64(minute)*60 + int64(second)
+}
+
+// fixOverflowedTime checks if a time.Date result overflowed Go's internal representation
+// (detected by the year changing) and if so, recomputes the timestamp using PHP's int64
+// overflow arithmetic to match PHP's behavior for extreme years.
+func fixOverflowedTime(t time.Time, wantYear, month, day, hour, minute, second int, loc *time.Location) time.Time {
+	if t.Year() == wantYear {
+		return t // no overflow
+	}
+	// Go's time.Date overflowed internally — compute Unix timestamp using PHP's algorithm
+	unix := phpUnixTimestamp(wantYear, month, day, hour, minute, second)
+	return time.Unix(unix, 0).In(loc)
 }

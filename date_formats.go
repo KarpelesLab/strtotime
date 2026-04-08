@@ -34,6 +34,11 @@ func parseISOFormat(str string, loc *time.Location) (time.Time, bool) {
 	if len(parts[0]) >= 4 {
 		// YYYY-MM-DD (ISO format)
 		year, month, day = first, second, third
+		// PHP doesn't support years > 9999 in YYYY-MM-DD format;
+		// it reinterprets the digits differently (e.g., as compact time).
+		if year > 9999 {
+			return time.Time{}, false
+		}
 	} else if len(parts[2]) >= 4 {
 		// D-M-YYYY (European style with dashes)
 		day, month, year = first, second, third
@@ -322,7 +327,9 @@ func parseSignedYear(str string, loc *time.Location) (time.Time, bool) {
 		hour, minute, second, nanos, tzLoc = parseTimeTzSuffix(timeTzPart, loc)
 	}
 
-	return time.Date(sign*year, time.Month(month), day, hour, minute, second, nanos, tzLoc), true
+	result := time.Date(sign*year, time.Month(month), day, hour, minute, second, nanos, tzLoc)
+	result = fixOverflowedTime(result, sign*year, month, day, hour, minute, second, tzLoc)
+	return result, true
 }
 
 // parseTimeTzSuffix parses "HH:MM:SS[.frac] [TZ]" from the suffix of a date string
@@ -422,14 +429,16 @@ func parseShortYearUSDateWithMilitaryTime(str string, loc *time.Location) (time.
 	return time.Date(year, time.Month(month), day, hour, minute, 0, 0, loc), true
 }
 
-// parseZeroDate handles the special case "0000-00-00 ..." which PHP maps to -0001-11-30
+// parseZeroDate handles the special case "0000-00-00 ..." which PHP maps to -0001-11-30.
+// PHP treats month 0 as December of previous year minus 1, and day 0 as last day of
+// previous month, resulting in year=-1, month=11(November), day=30.
 func parseZeroDate(str string, loc *time.Location) (time.Time, bool) {
 	trimmed := strings.TrimSpace(str)
 	if !strings.HasPrefix(trimmed, "0000-00-00") {
 		return time.Time{}, false
 	}
-	// Return year 0, month 1, day 1 (Go's zero-ish date)
-	return time.Date(0, 1, 1, 0, 0, 0, 0, loc), true
+	// PHP: year 0, month 0, day 0 → year -1, month 11 (Nov), day 30
+	return time.Date(0, 0, 0, 0, 0, 0, 0, loc), true
 }
 
 // splitDateAndRest splits a string into a date portion and the rest after whitespace.
@@ -482,4 +491,72 @@ func looksLikeDateFormat(s string) bool {
 	}
 
 	return false
+}
+
+// parseLargeYearAsTime handles numbers with 5+ digits that look like years > 9999
+// but PHP interprets differently. PHP treats the digits as compact time (HHMMS or HHMMSS)
+// and the subsequent -MM-DD as month and day, defaulting the year to "now".
+//
+// Examples:
+//   - "10000-01-01" → hour=10, min=00, sec=0, month=01, day=01 (5-digit: HHMMS)
+//   - "20000-06-15" → hour=20, min=00, sec=0, month=06, day=15 (5-digit: HHMMS)
+//   - "100000-12-31" → hour=10, min=00, sec=00, month=12, day=31 (6-digit: HHMMSS)
+func parseLargeYearAsTime(str string, now time.Time, loc *time.Location) (time.Time, bool) {
+	if strings.Count(str, "-") != 2 {
+		return time.Time{}, false
+	}
+
+	parts := strings.SplitN(str, "-", 3)
+	if len(parts) != 3 {
+		return time.Time{}, false
+	}
+
+	digits := parts[0]
+	if !isAllDigits(digits) || len(digits) < 5 || len(digits) > 6 {
+		return time.Time{}, false
+	}
+
+	// Parse the remaining parts as month and day
+	if !isAllDigits(parts[1]) || !isAllDigits(parts[2]) {
+		return time.Time{}, false
+	}
+	month, _ := strconv.Atoi(parts[1])
+	day, _ := strconv.Atoi(parts[2])
+
+	if len(digits) == 5 {
+		// HHMMS format (5 digits): time + month-day
+		hour, _ := strconv.Atoi(digits[0:2])
+		minute, _ := strconv.Atoi(digits[2:4])
+		second := int(digits[4] - '0')
+
+		if !IsValidTime(hour, minute, second) {
+			return time.Time{}, false
+		}
+		if month < 1 || month > 12 || day < 1 || day > 31 {
+			return time.Time{}, false
+		}
+
+		year := now.Year()
+		return time.Date(year, time.Month(month), day, hour, minute, second, 0, loc), true
+	}
+
+	// HHMMSS format (6 digits): PHP treats subsequent -XX as timezone offset,
+	// keeping today's date. The day portion (-DD) is consumed but ignored by PHP.
+	hour, _ := strconv.Atoi(digits[0:2])
+	minute, _ := strconv.Atoi(digits[2:4])
+	second, _ := strconv.Atoi(digits[4:6])
+
+	if !IsValidTime(hour, minute, second) {
+		return time.Time{}, false
+	}
+
+	// The first dash-number after the 6 digits is a timezone offset
+	tzOffset, _ := strconv.Atoi(parts[1])
+	if tzOffset < 0 || tzOffset > 14 {
+		return time.Time{}, false
+	}
+
+	y, m, d := now.Date()
+	tzLoc := time.FixedZone("", -tzOffset*3600)
+	return time.Date(y, m, d, hour, minute, second, 0, tzLoc), true
 }
