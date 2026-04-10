@@ -415,6 +415,17 @@ func (p *Parser) Parse() (time.Time, error) {
 			}
 		}
 
+		// Try bare hour with am/pm "10am", "10 pm"
+		if !parsed {
+			if t, ok, err := p.tryParseBareHourAMPM(); ok {
+				if err != nil {
+					return time.Time{}, err
+				}
+				p.result = t
+				parsed = true
+			}
+		}
+
 		// Try time keywords "midnight" / "noon"
 		if !parsed {
 			if t, ok, err := p.tryParseTimeKeyword(); ok {
@@ -1016,12 +1027,18 @@ func (p *Parser) tryParseMonthOnlyFormat() (time.Time, bool, error) {
 	}
 
 	// Check if this is actually a month name followed by a day
-	// If it is, we should let tryParseMonthNameFormat handle it
+	// If it is, we should let tryParseMonthNameFormat handle it.
+	// Exception: a number followed by ':' is a time expression, not a day,
+	// so we should handle the month here and let tryParseTimeExpression consume the time.
 	if p.position+1 < len(p.tokens) {
 		nextToken := p.tokens[p.position+1]
 		// If next token is a number, this might be "Month Day" format
 		if nextToken.Typ == TypeNumber {
-			return time.Time{}, false, nil
+			numIdx := p.position + 1
+			if !(numIdx+1 < len(p.tokens) &&
+				p.tokens[numIdx+1].Typ == TypeOperator && p.tokens[numIdx+1].Val == ":") {
+				return time.Time{}, false, nil
+			}
 		}
 		// If next token is "." (period after abbreviation like "Dec."), defer to month name format
 		if nextToken.Typ == TypeOperator && nextToken.Val == "." {
@@ -1030,7 +1047,11 @@ func (p *Parser) tryParseMonthOnlyFormat() (time.Time, bool, error) {
 		// Or if it's whitespace followed by a number, it might be "Month Day" with space
 		if nextToken.Typ == TypeWhitespace && p.position+2 < len(p.tokens) &&
 			p.tokens[p.position+2].Typ == TypeNumber {
-			return time.Time{}, false, nil
+			numIdx := p.position + 2
+			if !(numIdx+1 < len(p.tokens) &&
+				p.tokens[numIdx+1].Typ == TypeOperator && p.tokens[numIdx+1].Val == ":") {
+				return time.Time{}, false, nil
+			}
 		}
 	}
 
@@ -1525,6 +1546,35 @@ func (p *Parser) tryParseTimeExpression() (time.Time, bool, error) {
 
 	year, month, day := p.result.Date()
 	return time.Date(year, month, day, hour, minute, second, 0, p.loc), true, nil
+}
+
+// tryParseBareHourAMPM handles a bare hour followed by am/pm like "10am" or "10 pm"
+func (p *Parser) tryParseBareHourAMPM() (time.Time, bool, error) {
+	if p.position >= len(p.tokens) || p.tokens[p.position].Typ != TypeNumber {
+		return time.Time{}, false, nil
+	}
+	hour, err := strconv.Atoi(p.tokens[p.position].Val)
+	if err != nil || hour < 1 || hour > 12 {
+		return time.Time{}, false, nil
+	}
+
+	next := p.position + 1
+	if next < len(p.tokens) && p.tokens[next].Typ == TypeWhitespace {
+		next++
+	}
+	if next >= len(p.tokens) || p.tokens[next].Typ != TypeString {
+		return time.Time{}, false, nil
+	}
+	ampm := strings.ToLower(p.tokens[next].Val)
+	if ampm != "am" && ampm != "pm" {
+		return time.Time{}, false, nil
+	}
+
+	hour = applyAMPM(hour, ampm)
+	p.position = next + 1
+
+	year, month, day := p.result.Date()
+	return time.Date(year, month, day, hour, 0, 0, 0, p.loc), true, nil
 }
 
 // tryParseOrdinalRelativeTime handles ordinal words as implicit relative time

@@ -782,20 +782,33 @@ func parseFirstLastDayOfDate(str string, now time.Time, loc *time.Location) (tim
 		}
 	}
 
-	// Try to parse rest as a month name with optional year
+	// Try to parse rest as a month name with optional year and optional trailing time
 	fields := strings.Fields(rest)
 	if len(fields) >= 1 {
 		if month, ok := getMonthByNameFlex(fields[0]); ok {
+			idx := 1
 			year := now.Year()
-			if len(fields) >= 2 {
-				if y, err := strconv.Atoi(fields[1]); err == nil {
+			if idx < len(fields) {
+				if y, err := strconv.Atoi(fields[idx]); err == nil {
 					year = y
+					idx++
 				}
 			}
-			if isFirst {
-				return time.Date(year, month, 1, 0, 0, 0, 0, loc), true
+			hour, minute, second := 0, 0, 0
+			if idx < len(fields) {
+				h, m, s, consumed, ok := parseFlexTime(fields[idx])
+				if ok && consumed == len(fields[idx]) {
+					hour, minute, second = h, m, s
+					idx++
+				}
 			}
-			return time.Date(year, month, daysInMonth(year, month), 0, 0, 0, 0, loc), true
+			if idx != len(fields) {
+				return time.Time{}, false
+			}
+			if isFirst {
+				return time.Date(year, month, 1, hour, minute, second, 0, loc), true
+			}
+			return time.Date(year, month, daysInMonth(year, month), hour, minute, second, 0, loc), true
 		}
 	}
 
@@ -1181,6 +1194,18 @@ func parseNumberedWeekday(str string, now time.Time, loc *time.Location) (time.T
 		}
 	}
 
+	// Parse optional trailing time expression (HH:MM[:SS])
+	trailingHour, trailingMinute, trailingSecond := 0, 0, 0
+	hasTrailingTime := false
+	if idx < len(fields) {
+		h, m, s, consumed, ok := parseFlexTime(fields[idx])
+		if ok && consumed == len(fields[idx]) {
+			trailingHour, trailingMinute, trailingSecond = h, m, s
+			hasTrailingTime = true
+			idx++
+		}
+	}
+
 	// Make sure we consumed all fields
 	if idx != len(fields) {
 		return time.Time{}, false
@@ -1260,10 +1285,13 @@ func parseNumberedWeekday(str string, now time.Time, loc *time.Location) (time.T
 	}
 
 	// PHP: "first/last day of" preserves the base time's hour/minute/second;
-	// weekday expressions reset to midnight
+	// weekday expressions reset to midnight. An explicit trailing time overrides both.
 	h, mi, s := 0, 0, 0
 	if isDayOfMonth {
 		h, mi, s = now.Hour(), now.Minute(), now.Second()
+	}
+	if hasTrailingTime {
+		h, mi, s = trailingHour, trailingMinute, trailingSecond
 	}
 	// Apply relative year offset AFTER weekday resolution (PHP pipeline order).
 	// This means the day-of-week may shift when the year changes.
