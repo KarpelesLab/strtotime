@@ -573,29 +573,88 @@ func parseDayMonthYearCompact(str string, now time.Time, loc *time.Location) (ti
 // applyAMPM converts 12-hour time to 24-hour format
 
 // parseMonthYearOnly parses "Oct 2001" or "2001 Oct" (month + year, day defaults to 1)
+// with optional trailing time: "october 2010 23:00", "2010 october 11:30 pm"
 func parseMonthYearOnly(str string, loc *time.Location) (time.Time, bool) {
 	fields := strings.Fields(str)
-	if len(fields) != 2 {
+	if len(fields) < 2 {
 		return time.Time{}, false
 	}
 
+	var month time.Month
+	var year int
+	idx := 0
+
 	// Try "Month Year" — year must be >= 100 or have 4+ digits (e.g., "0099") to avoid
 	// "April 4" being treated as year 4
-	if month, ok := getMonthByNameFlex(fields[0]); ok {
-		year, err := strconv.Atoi(fields[1])
-		if err == nil && (year >= 100 || len(fields[1]) >= 4) {
-			return time.Date(year, month, 1, 0, 0, 0, 0, loc), true
+	if m, ok := getMonthByNameFlex(fields[0]); ok {
+		if y, err := strconv.Atoi(fields[1]); err == nil && (y >= 100 || len(fields[1]) >= 4) {
+			month, year = m, y
+			idx = 2
 		}
 	}
 
 	// Try "Year Month"
-	if year, err := strconv.Atoi(fields[0]); err == nil && (year >= 100 || len(fields[0]) >= 4) {
-		if month, ok := getMonthByNameFlex(fields[1]); ok {
-			return time.Date(year, month, 1, 0, 0, 0, 0, loc), true
+	if idx == 0 {
+		if y, err := strconv.Atoi(fields[0]); err == nil && (y >= 100 || len(fields[0]) >= 4) {
+			if m, ok := getMonthByNameFlex(fields[1]); ok {
+				month, year = m, y
+				idx = 2
+			}
 		}
 	}
 
-	return time.Time{}, false
+	if idx == 0 {
+		return time.Time{}, false
+	}
+
+	// Parse optional trailing time
+	hour, minute, second := 0, 0, 0
+	if idx < len(fields) {
+		timeStr := fields[idx]
+		if strings.Contains(timeStr, ":") {
+			h, m, s, consumed, ok := parseFlexTime(timeStr)
+			if !ok {
+				return time.Time{}, false
+			}
+			hour, minute, second = h, m, s
+			idx++
+			// Check for AM/PM attached to time or as next field
+			remaining := timeStr[consumed:]
+			if ampm := strings.ToLower(remaining); ampm == "am" || ampm == "pm" {
+				hour = applyAMPM(hour, ampm)
+			} else if idx < len(fields) {
+				ampm = strings.ToLower(fields[idx])
+				if ampm == "am" || ampm == "pm" {
+					hour = applyAMPM(hour, ampm)
+					idx++
+				}
+			}
+		} else {
+			// Try bare AM/PM time: "11pm", "3am"
+			f := strings.ToLower(timeStr)
+			var ampm string
+			if strings.HasSuffix(f, "pm") {
+				ampm = "pm"
+				f = f[:len(f)-2]
+			} else if strings.HasSuffix(f, "am") {
+				ampm = "am"
+				f = f[:len(f)-2]
+			}
+			if ampm != "" {
+				if h, err := strconv.Atoi(f); err == nil && h >= 1 && h <= 12 {
+					hour = applyAMPM(h, ampm)
+					idx++
+				}
+			}
+		}
+	}
+
+	// All fields must be consumed
+	if idx != len(fields) {
+		return time.Time{}, false
+	}
+
+	return time.Date(year, month, 1, hour, minute, second, 0, loc), true
 }
 
 // parseTimeBeforeDate parses formats where time precedes the date:
