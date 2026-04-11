@@ -1,10 +1,26 @@
 package strtotime
 
 import (
+	"fmt"
 	"strconv"
 	"strings"
 	"time"
 )
+
+// fixedZone creates a time.FixedZone with a PHP-style "+HH:MM" / "-HH:MM" name
+// derived from the offset in seconds.
+func fixedZone(offsetSeconds int) *time.Location {
+	sign := "+"
+	abs := offsetSeconds
+	if abs < 0 {
+		sign = "-"
+		abs = -abs
+	}
+	h := abs / 3600
+	m := (abs % 3600) / 60
+	name := fmt.Sprintf("%s%02d:%02d", sign, h, m)
+	return time.FixedZone(name, offsetSeconds)
+}
 
 // applyTimeOffset applies a time unit offset to the given time.
 // It normalizes the unit string and handles all PHP-compatible time arithmetic

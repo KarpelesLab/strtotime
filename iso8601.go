@@ -246,7 +246,7 @@ func parseNumericTimezoneOffset(s string) (*time.Location, int, bool) {
 		m, _ := strconv.Atoi(rest[3:5])
 		if h <= 14 && m <= 59 {
 			offset := sign * (h*3600 + m*60)
-			return time.FixedZone("", offset), 6, true
+			return fixedZone(offset), 6, true
 		}
 	}
 
@@ -257,7 +257,7 @@ func parseNumericTimezoneOffset(s string) (*time.Location, int, bool) {
 		m := int(rest[3] - '0')
 		if h <= 14 && m <= 59 {
 			offset := sign * (h*3600 + m*60)
-			return time.FixedZone("", offset), 5, true
+			return fixedZone(offset), 5, true
 		}
 	}
 
@@ -267,7 +267,7 @@ func parseNumericTimezoneOffset(s string) (*time.Location, int, bool) {
 		m, _ := strconv.Atoi(rest[2:4])
 		if h <= 14 && m <= 59 {
 			offset := sign * (h*3600 + m*60)
-			return time.FixedZone("", offset), 5, true
+			return fixedZone(offset), 5, true
 		}
 	}
 
@@ -278,7 +278,7 @@ func parseNumericTimezoneOffset(s string) (*time.Location, int, bool) {
 			h, _ := strconv.Atoi(rest[:2])
 			if h <= 14 {
 				offset := sign * h * 3600
-				return time.FixedZone("", offset), 3, true
+				return fixedZone(offset), 3, true
 			}
 		}
 	}
@@ -288,7 +288,7 @@ func parseNumericTimezoneOffset(s string) (*time.Location, int, bool) {
 		h, m, _, consumed, ok := parseFlexTime(rest)
 		if ok && h <= 14 && m <= 59 {
 			offset := sign * (h*3600 + m*60)
-			return time.FixedZone("", offset), consumed + 1, true
+			return fixedZone(offset), consumed + 1, true
 		}
 	}
 
@@ -378,7 +378,7 @@ func parseISOWeekDate(str string, loc *time.Location) (time.Time, bool) {
 			week1Monday := jan4.AddDate(0, 0, -(isoWeekday - 1))
 			target := week1Monday.AddDate(0, 0, (week-1)*7)
 			// Create midnight in the offset timezone (not just relabel)
-			tzLoc := time.FixedZone("", -h*3600)
+			tzLoc := fixedZone(-h * 3600)
 			return time.Date(target.Year(), target.Month(), target.Day(), 0, 0, 0, 0, tzLoc), true
 		}
 		// Reject any remaining content

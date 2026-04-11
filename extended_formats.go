@@ -305,7 +305,7 @@ func parseHTTPLogFormat(str string, loc *time.Location) (time.Time, bool) {
 		tzOffsetSeconds = -tzOffsetSeconds
 	}
 
-	tz := time.FixedZone("", tzOffsetSeconds)
+	tz := fixedZone(tzOffsetSeconds)
 	return time.Date(year, month, day, hour, minute, second, 0, tz), true
 }
 

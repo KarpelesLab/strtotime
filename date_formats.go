@@ -557,6 +557,6 @@ func parseLargeYearAsTime(str string, now time.Time, loc *time.Location) (time.T
 	}
 
 	y, m, d := now.Date()
-	tzLoc := time.FixedZone("", -tzOffset*3600)
+	tzLoc := fixedZone(-tzOffset * 3600)
 	return time.Date(y, m, d, hour, minute, second, 0, tzLoc), true
 }
