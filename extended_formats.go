@@ -1140,9 +1140,11 @@ func parseRomanNumeralDate(str string, loc *time.Location) (time.Time, bool) {
 // parseNumberedWeekday parses formats like "1 Monday December 2008", "second Monday December 2008"
 // It handles formats like "first Monday of December 2008" or "3rd Friday of January"
 // Also handles "+N week Thursday Nov 2007" (week offset + weekday + month + year)
+// Also handles "3 tuesday" or "third tuesday" (no month context — count forward from now)
+// Also handles "third tuesday of this month" (calendar month context)
 func parseNumberedWeekday(str string, now time.Time, loc *time.Location) (time.Time, bool) {
 	fields := strings.Fields(str)
-	if len(fields) < 3 {
+	if len(fields) < 2 {
 		return time.Time{}, false
 	}
 
@@ -1189,7 +1191,23 @@ func parseNumberedWeekday(str string, now time.Time, loc *time.Location) (time.T
 		idx++
 	}
 
-	// Parse the month context: either a literal month name or "next/last month/year"
+	// No month context: "3 tuesday", "third tuesday" — count forward from base date
+	// Exclude ordinal=-1 ("last weekday") — that's handled by the token parser.
+	if idx >= len(fields) && !hasOf && !isDayOfMonth && ordinal > 0 {
+		currentDay := int(now.Weekday())
+		daysUntil := (dayOfWeek - currentDay + 7) % 7
+		if isWordOrdinal && daysUntil == 0 {
+			daysUntil = 7
+		}
+		totalDays := daysUntil + (ordinal-1)*7
+		h, mi, s := now.Hour(), now.Minute(), now.Second()
+		if isWordOrdinal {
+			h, mi, s = 0, 0, 0
+		}
+		return time.Date(now.Year(), now.Month(), now.Day()+totalDays, h, mi, s, 0, loc), true
+	}
+
+	// Parse the month context: either a literal month name or "this/next/last month/year"
 	if idx >= len(fields) {
 		return time.Time{}, false
 	}
@@ -1199,7 +1217,7 @@ func parseNumberedWeekday(str string, now time.Time, loc *time.Location) (time.T
 	relativeYears := 0 // PHP applies year offset AFTER weekday adjustment
 
 	direction := strings.ToLower(fields[idx])
-	if direction == DirectionNext || direction == DirectionLast {
+	if direction == DirectionNext || direction == DirectionLast || direction == "this" {
 		// Relative month/year: "next month", "last year", etc.
 		idx++
 		if idx >= len(fields) {
@@ -1214,10 +1232,14 @@ func parseNumberedWeekday(str string, now time.Time, loc *time.Location) (time.T
 				ref := now.AddDate(0, 1, 0)
 				month = ref.Month()
 				year = ref.Year()
-			} else {
+			} else if direction == DirectionLast {
 				ref := now.AddDate(0, -1, 0)
 				month = ref.Month()
 				year = ref.Year()
+			} else {
+				// "this month" — current month/year unchanged
+				month = now.Month()
+				year = now.Year()
 			}
 		case UnitYear:
 			// PHP: weekday is resolved in the BASE year, then the year offset is
@@ -1226,9 +1248,10 @@ func parseNumberedWeekday(str string, now time.Time, loc *time.Location) (time.T
 			year = now.Year()
 			if direction == DirectionNext {
 				relativeYears = 1
-			} else {
+			} else if direction == DirectionLast {
 				relativeYears = -1
 			}
+			// "this year" — no offset needed
 		default:
 			return time.Time{}, false
 		}
