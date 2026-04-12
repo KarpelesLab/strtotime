@@ -119,7 +119,11 @@ func tryWeekdayPrefixReparse(str string, now time.Time, loc *time.Location, opts
 		return time.Time{}, false
 	}
 
-	t, err := StrToTime(rest, opts...)
+	// Propagate the effective location so DateParse (zero base time, UTC)
+	// doesn't leak the caller's local timezone into the reparse.
+	reparseOpts := append([]Option(nil), opts...)
+	reparseOpts = append(reparseOpts, InTZ(loc))
+	t, err := StrToTime(rest, reparseOpts...)
 	if err != nil {
 		return time.Time{}, false
 	}
@@ -633,6 +637,16 @@ func (p *Parser) tryParseNextLastExpression() (time.Time, bool, error) {
 	// Handle special case: "next week" and "last week"
 	// PHP treats Monday as the first day of the week.
 	if unitToken.Val == UnitWeek {
+		if p.pd != nil {
+			// PHP represents "next/last/this week" as weekday=1 (Monday)
+			// plus a +/-7 day offset.
+			p.pd.SetRelativeWeekday(1)
+			if isNext {
+				p.pd.AddRelative(UnitDay, 7)
+			} else if !isThis {
+				p.pd.AddRelative(UnitDay, -7)
+			}
+		}
 		dayOfWeek := int(p.result.Weekday())
 		// Days since this week's Monday (Go weekday: 0=Sun,1=Mon,...,6=Sat)
 		daysSinceMonday := (dayOfWeek + 6) % 7
@@ -654,6 +668,12 @@ func (p *Parser) tryParseNextLastExpression() (time.Time, bool, error) {
 	if dayNum >= 0 {
 		if p.pd != nil {
 			p.pd.SetRelativeWeekday(dayNum)
+			// PHP sets hour/minute/second to 0 for "next/last/this <weekday>".
+			p.pd.SetTime(0, 0, 0)
+			// "last <weekday>" adds a -7 day offset to the relative block.
+			if !isNext && !isThis {
+				p.pd.AddRelative(UnitDay, -7)
+			}
 		}
 		// Handle day of week
 		currentDay := int(p.result.Weekday())
@@ -1094,6 +1114,7 @@ func (p *Parser) tryParseMonthNameFormat() (time.Time, bool, error) {
 
 	// Check for year (optional - if not present, use current year)
 	year := p.result.Year() // Default to current year
+	yearFromInput := false
 
 	if p.position < len(p.tokens) {
 		yearToken := p.tokens[p.position]
@@ -1109,6 +1130,7 @@ func (p *Parser) tryParseMonthNameFormat() (time.Time, bool, error) {
 					return time.Time{}, false, fmt.Errorf("invalid year: %s", yearToken.Val)
 				}
 				year = yearVal
+				yearFromInput = true
 				p.position++
 			}
 		}
@@ -1117,6 +1139,14 @@ func (p *Parser) tryParseMonthNameFormat() (time.Time, bool, error) {
 	// Validate date components before returning
 	if !IsValidDate(year, int(month), day) {
 		return time.Time{}, false, fmt.Errorf("invalid date: %s %d, %d", month, day, year)
+	}
+	if p.pd != nil {
+		if yearFromInput {
+			p.pd.SetDate(year, int(month), day)
+		} else {
+			p.pd.SetMonth(int(month))
+			p.pd.SetDay(day)
+		}
 	}
 
 	// Default time components
@@ -1176,6 +1206,11 @@ func (p *Parser) tryParseMonthNameFormat() (time.Time, bool, error) {
 	} else {
 		// No timezone found, restore position
 		p.position = tzStartPos
+	}
+
+	// Record hour/minute/second if we actually parsed any time.
+	if p.pd != nil && (hour != 0 || minute != 0 || second != 0) {
+		p.pd.SetTime(hour, minute, second)
 	}
 
 	return time.Date(year, month, day, hour, minute, second, 0, p.loc), true, nil
@@ -1289,6 +1324,9 @@ func (p *Parser) tryParseBareWeekday() (time.Time, bool, error) {
 	// Bare weekday name — PHP returns same day if base matches, else next occurrence
 	if p.pd != nil {
 		p.pd.SetRelativeWeekday(dayNum)
+		// PHP sets hour/minute/second to 0 (and fraction defaults to 0)
+		// for bare weekday expressions.
+		p.pd.SetTime(0, 0, 0)
 	}
 	currentDay := int(p.result.Weekday())
 	daysUntil := (dayNum - currentDay + 7) % 7
@@ -1484,6 +1522,15 @@ func (p *Parser) tryParseWeekdayAgo() (time.Time, bool, error) {
 	totalDays := daysSince + (amount-1)*7
 	result := p.result.AddDate(0, 0, -totalDays)
 
+	if p.pd != nil {
+		// PHP records "N weekdays ago" as relative.day=-(N-1)*7 with
+		// weekday=-1 (a negative-direction flag, not a count).
+		if amount > 1 {
+			p.pd.AddRelative(UnitDay, -(amount-1)*7)
+		}
+		p.pd.SetRelativeWeekday(-1)
+	}
+
 	// Preserve time from p.result
 	year, month, day := result.Date()
 	return time.Date(year, month, day, p.result.Hour(), p.result.Minute(), p.result.Second(), p.result.Nanosecond(), p.loc), true, nil
@@ -1514,6 +1561,8 @@ func (p *Parser) tryParseTimeExpression() (time.Time, bool, error) {
 	p.position++
 
 	second := 0
+	fraction := 0.0
+	hasFraction := false
 	if p.position+1 < len(p.tokens) &&
 		p.tokens[p.position].Typ == TypeOperator && p.tokens[p.position].Val == ":" &&
 		p.tokens[p.position+1].Typ == TypeNumber {
@@ -1523,10 +1572,44 @@ func (p *Parser) tryParseTimeExpression() (time.Time, bool, error) {
 			second = s
 			p.position++
 		}
+		// Optional fractional seconds: . followed by digits
+		if p.position+1 < len(p.tokens) &&
+			p.tokens[p.position].Typ == TypeOperator && p.tokens[p.position].Val == "." &&
+			p.tokens[p.position+1].Typ == TypeNumber {
+			p.position++ // Skip .
+			fracStr := p.tokens[p.position].Val
+			if f, err := strconv.ParseFloat("0."+fracStr, 64); err == nil {
+				fraction = f
+				hasFraction = true
+				p.position++
+			}
+		}
 	}
 
+	// Optional trailing am/pm (with or without separating whitespace)
+	savedPos := p.position
+	p.skipWhitespace()
+	if p.position < len(p.tokens) && p.tokens[p.position].Typ == TypeString {
+		ampm := strings.ToLower(p.tokens[p.position].Val)
+		if ampm == "am" || ampm == "pm" {
+			hour = applyAMPM(hour, ampm)
+			p.position++
+		} else {
+			p.position = savedPos
+		}
+	} else {
+		p.position = savedPos
+	}
+
+	if p.pd != nil {
+		p.pd.SetTime(hour, minute, second)
+		if hasFraction {
+			p.pd.SetFraction(fraction)
+		}
+	}
 	year, month, day := p.result.Date()
-	return time.Date(year, month, day, hour, minute, second, 0, p.loc), true, nil
+	nanos := int(fraction * 1e9)
+	return time.Date(year, month, day, hour, minute, second, nanos, p.loc), true, nil
 }
 
 // tryParseBareHourAMPM handles a bare hour followed by am/pm like "10am" or "10 pm"
@@ -1554,6 +1637,9 @@ func (p *Parser) tryParseBareHourAMPM() (time.Time, bool, error) {
 	hour = applyAMPM(hour, ampm)
 	p.position = next + 1
 
+	if p.pd != nil {
+		p.pd.SetTime(hour, 0, 0)
+	}
 	year, month, day := p.result.Date()
 	return time.Date(year, month, day, hour, 0, 0, 0, p.loc), true, nil
 }

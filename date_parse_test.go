@@ -35,7 +35,7 @@ func TestDateParse_PHPShapes(t *testing.T) {
 			name: "month and year only",
 			in:   "May 2020",
 			want: map[string]any{
-				"year": 2020.0, "month": 5.0, "day": false,
+				"year": 2020.0, "month": 5.0, "day": 1.0,
 				"hour": false, "minute": false, "second": false,
 				"fraction":      false,
 				"warning_count": 0.0, "warnings": []any{},

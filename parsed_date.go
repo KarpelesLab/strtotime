@@ -418,7 +418,14 @@ func (pd *ParsedDate) MarshalJSON() ([]byte, error) {
 	writeField("hour", marshalJSONOrDefault(pd.Hour), &first)
 	writeField("minute", marshalJSONOrDefault(pd.Minute), &first)
 	writeField("second", marshalJSONOrDefault(pd.Second), &first)
-	writeField("fraction", marshalJSONOrDefault(pd.Fraction), &first)
+
+	// PHP behavior: when any time component is set, fraction defaults to 0
+	// instead of false.
+	fraction := pd.Fraction
+	if !fraction.Set && pd.Hour.Set {
+		fraction = OptFloat{V: 0, Set: true}
+	}
+	writeField("fraction", marshalJSONOrDefault(fraction), &first)
 
 	writeField("warning_count", marshal(pd.WarningCount), &first)
 	writeField("warnings", marshalMapIntString(pd.Warnings), &first)
@@ -438,6 +445,10 @@ func (pd *ParsedDate) MarshalJSON() ([]byte, error) {
 			writeField("is_dst", marshal(pd.IsDST), &first)
 			writeField("tz_abbr", marshal(pd.TzAbbr), &first)
 		case 3:
+			// UTC is the only tz where PHP emits both tz_abbr and tz_id.
+			if pd.TzAbbr != "" {
+				writeField("tz_abbr", marshal(pd.TzAbbr), &first)
+			}
 			writeField("tz_id", marshal(pd.TzID), &first)
 		}
 	}
@@ -491,7 +502,8 @@ func marshalMapIntString(m map[int]string) []byte {
 }
 
 // MarshalJSON for Relative always emits the six integer fields and
-// conditionally includes weekday/weekdays.
+// conditionally includes weekday, weekdays, first_day_of_month,
+// last_day_of_month — matching PHP's date_parse relative layout.
 func (r *Relative) MarshalJSON() ([]byte, error) {
 	var buf bytes.Buffer
 	buf.WriteByte('{')
@@ -502,6 +514,11 @@ func (r *Relative) MarshalJSON() ([]byte, error) {
 	}
 	if r.Weekdays.Set {
 		fmt.Fprintf(&buf, `,"weekdays":%d`, r.Weekdays.V)
+	}
+	if r.firstLastDayMode == 1 {
+		buf.WriteString(`,"first_day_of_month":true`)
+	} else if r.firstLastDayMode == 2 {
+		buf.WriteString(`,"last_day_of_month":true`)
 	}
 	buf.WriteByte('}')
 	return buf.Bytes(), nil

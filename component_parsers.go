@@ -139,8 +139,20 @@ func parseSignedYearInto(str string, now time.Time, loc *time.Location, opts []O
 }
 
 func parseISO8601Into(str string, now time.Time, loc *time.Location, opts []Option, pd *ParsedDate) bool {
-	// Week date: YYYY-Www[-D]
+	// Week date: YYYY-Www[-D] — PHP represents this as year-Jan-1 plus a
+	// relative day offset equal to (week-1)*7 + (dayOfWeek-1).
 	if t, ok := parseISOWeekDate(str, loc); ok {
+		year, week, dayOfWeek := extractWeekDateParts(str)
+		if year > 0 {
+			pd.SetDate(year, 1, 1)
+			days := (week-1)*7 + dayOfWeek
+			if days != 0 {
+				pd.AddRelative(UnitDay, days)
+			}
+			pd.setMaterialized(t)
+			pd.relativeApplied = true
+			return true
+		}
 		pd.SetDate(t.Year(), int(t.Month()), t.Day())
 		pd.setMaterialized(t)
 		return true
@@ -225,7 +237,12 @@ func parseISO8601DateTimeInto(str string, loc *time.Location, pd *ParsedDate) bo
 // recordISO8601TZ parses a trailing timezone suffix from an ISO 8601 input
 // and records its metadata in pd.
 func recordISO8601TZ(tzStr string, pd *ParsedDate, t time.Time) {
-	// Numeric offset first (Z, +HH:MM, +HHMM, +HH)
+	// PHP treats "Z" as an abbreviation (zone_type 2), not a UTC offset.
+	if strings.EqualFold(tzStr, "Z") {
+		pd.SetTZAbbreviation(time.UTC, "Z", 0, false)
+		return
+	}
+	// Numeric offset (+HH:MM, +HHMM, +HH)
 	if _, consumed, ok := parseNumericTimezoneOffset(tzStr); ok {
 		remaining := strings.TrimSpace(tzStr[consumed:])
 		if remaining != "" {
@@ -404,9 +421,32 @@ func parseMonthNameFormatInto(str string, now time.Time, loc *time.Location, opt
 	if !ok {
 		return false
 	}
-	pd.SetDate(t.Year(), int(t.Month()), t.Day())
+	// PHP omits the year when the input didn't contain one (e.g. "Dec 25").
+	if hasFourDigitYear(str) {
+		pd.SetDate(t.Year(), int(t.Month()), t.Day())
+	} else {
+		pd.SetMonth(int(t.Month()))
+		pd.SetDay(t.Day())
+	}
 	pd.setMaterialized(t)
 	return true
+}
+
+// hasFourDigitYear reports whether str contains a 4-digit number that could
+// serve as an explicit year.
+func hasFourDigitYear(str string) bool {
+	run := 0
+	for i := 0; i <= len(str); i++ {
+		if i < len(str) && str[i] >= '0' && str[i] <= '9' {
+			run++
+			continue
+		}
+		if run == 4 {
+			return true
+		}
+		run = 0
+	}
+	return false
 }
 
 func parseHTTPLogFormatInto(str string, now time.Time, loc *time.Location, opts []Option, pd *ParsedDate) bool {
@@ -515,16 +555,60 @@ func parseDateWithTZInto(str string, now time.Time, loc *time.Location, opts []O
 }
 
 func parseDayMonthYearInto(str string, now time.Time, loc *time.Location, opts []Option, pd *ParsedDate) bool {
+	// Peek weekday prefix so we can record it as relative.weekday.
+	_, dayNum, stripped := stripWeekdayPrefix(str)
+
 	t, ok := parseDayMonthYear(str, now, loc)
 	if !ok {
 		return false
 	}
 	pd.SetDate(t.Year(), int(t.Month()), t.Day())
-	if t.Hour() != 0 || t.Minute() != 0 || t.Second() != 0 {
+	// Time is recorded whenever a time portion was present. Detect via ":"
+	// in the input (post-weekday-prefix, after stripping the date fields).
+	if strings.Contains(str, ":") {
 		pd.SetTime(t.Hour(), t.Minute(), t.Second())
+		if t.Nanosecond() != 0 {
+			pd.SetFraction(float64(t.Nanosecond()) / 1e9)
+		}
+	}
+	// Detect an explicit trailing timezone in the input regardless of whether
+	// t.Location() == loc — both may happen to be UTC.
+	if tzStr, ok := lastFieldLooksLikeTZ(str); ok {
+		if len(tzStr) > 0 && (tzStr[0] == '+' || tzStr[0] == '-') {
+			offset := computeOffsetSeconds(tzStr)
+			pd.SetTZOffset(t.Location(), offset)
+		} else if resolved, found := tryParseTimezone(tzStr); found {
+			setTZFromName(pd, tzStr, resolved)
+		}
+	}
+	if stripped && dayNum >= 0 {
+		pd.SetRelativeWeekday(dayNum)
 	}
 	pd.setMaterialized(t)
 	return true
+}
+
+// lastFieldLooksLikeTZ returns the last whitespace-separated field if it
+// looks like a timezone token (numeric offset, IANA name with "/", or a
+// resolvable abbreviation).
+func lastFieldLooksLikeTZ(str string) (string, bool) {
+	fields := strings.Fields(str)
+	if len(fields) == 0 {
+		return "", false
+	}
+	last := fields[len(fields)-1]
+	if len(last) == 0 {
+		return "", false
+	}
+	if last[0] == '+' || last[0] == '-' {
+		if _, _, ok := parseNumericTimezoneOffset(last); ok {
+			return last, true
+		}
+	}
+	if _, ok := tryParseTimezone(last); ok {
+		return last, true
+	}
+	return "", false
 }
 
 func parseMonthYearOnlyInto(str string, now time.Time, loc *time.Location, opts []Option, pd *ParsedDate) bool {
@@ -532,8 +616,8 @@ func parseMonthYearOnlyInto(str string, now time.Time, loc *time.Location, opts 
 	if !ok {
 		return false
 	}
-	pd.SetYear(t.Year())
-	pd.SetMonth(int(t.Month()))
+	// PHP date_parse fills in day=1 for "Month Year" inputs.
+	pd.SetDate(t.Year(), int(t.Month()), 1)
 	pd.setMaterialized(t)
 	return true
 }
@@ -564,6 +648,19 @@ func parseFirstLastDayOfDateInto(str string, now time.Time, loc *time.Location, 
 	t, ok := parseFirstLastDayOfDate(str, now, loc)
 	if !ok {
 		return false
+	}
+	// PHP reports day=1 for "first/last day of <Month> <Year>" and records
+	// the first_day_of_month / last_day_of_month flag on the relative block.
+	if ordinal, ok := detectFirstLastDayOfMonthYear(str); ok {
+		pd.SetDate(t.Year(), int(t.Month()), 1)
+		if ordinal == 1 {
+			pd.SetFirstLastDayOf(1)
+		} else {
+			pd.SetFirstLastDayOf(2)
+		}
+		pd.setMaterialized(t)
+		pd.relativeApplied = true
+		return true
 	}
 	pd.SetDate(t.Year(), int(t.Month()), t.Day())
 	pd.setMaterialized(t) // preserves base-time hour/minute/second for +/- forms
@@ -597,9 +694,94 @@ func parseNumberedWeekdayInto(str string, now time.Time, loc *time.Location, opt
 		pd.relativeApplied = true
 		return true
 	}
+	// "first/last day of <Month> [<Year>]" → PHP reports year/month with
+	// day=1 and flags the relative first/last_day_of_month, regardless of
+	// whether it's actually the last day.
+	if ordinal, ok := detectFirstLastDayOfMonthYear(str); ok {
+		if ordinal == 1 {
+			pd.SetFirstLastDayOf(1)
+		} else {
+			pd.SetFirstLastDayOf(2)
+		}
+		pd.SetDate(t.Year(), int(t.Month()), 1)
+		// The materialized t from parseNumberedWeekday already resolved the
+		// correct day; use it so StrToTime keeps working.
+		pd.setMaterialized(t)
+		pd.relativeApplied = true
+		return true
+	}
 	pd.SetDate(t.Year(), int(t.Month()), t.Day())
 	pd.setMaterialized(t)
 	return true
+}
+
+// extractWeekDateParts parses "YYYY-Www[-D]" or "YYYYWww[D]" and returns
+// (year, week, dayOfWeek). Returns year=0 when the input isn't a week date.
+func extractWeekDateParts(str string) (year, week, dayOfWeek int) {
+	dayOfWeek = 1
+	wIdx := -1
+	for i := 1; i < len(str); i++ {
+		if str[i] == 'w' && str[i-1] >= '0' && str[i-1] <= '9' {
+			wIdx = i
+			break
+		}
+		if str[i] == 'w' && str[i-1] == '-' && i >= 2 && str[i-2] >= '0' && str[i-2] <= '9' {
+			wIdx = i
+			break
+		}
+	}
+	if wIdx < 0 {
+		return 0, 0, 0
+	}
+	yearPart := strings.TrimSuffix(str[:wIdx], "-")
+	if !isAllDigits(yearPart) || len(yearPart) == 0 {
+		return 0, 0, 0
+	}
+	y, err := strconv.Atoi(yearPart)
+	if err != nil {
+		return 0, 0, 0
+	}
+	year = y
+	rest := str[wIdx+1:]
+	if len(rest) < 2 || !isAllDigits(rest[:2]) {
+		return 0, 0, 0
+	}
+	w, _ := strconv.Atoi(rest[:2])
+	week = w
+	rest = rest[2:]
+	if len(rest) > 0 && rest[0] == '-' {
+		rest = rest[1:]
+	}
+	if len(rest) > 0 && rest[0] >= '0' && rest[0] <= '9' {
+		dow, _ := strconv.Atoi(rest[:1])
+		if dow >= 1 && dow <= 7 {
+			dayOfWeek = dow
+		}
+	}
+	return year, week, dayOfWeek
+}
+
+// detectFirstLastDayOfMonthYear matches "first/last day of <MonthName> [<Year>]".
+func detectFirstLastDayOfMonthYear(str string) (ordinal int, ok bool) {
+	fields := strings.Fields(str)
+	if len(fields) < 4 || len(fields) > 5 {
+		return 0, false
+	}
+	switch strings.ToLower(fields[0]) {
+	case "first":
+		ordinal = 1
+	case "last":
+		ordinal = -1
+	default:
+		return 0, false
+	}
+	if strings.ToLower(fields[1]) != "day" || strings.ToLower(fields[2]) != "of" {
+		return 0, false
+	}
+	if _, isMonth := getMonthByNameFlex(fields[3]); !isMonth {
+		return 0, false
+	}
+	return ordinal, true
 }
 
 // detectRelativeFirstLastDay recognises "first/last day of next/last/this
@@ -639,27 +821,77 @@ func parseUnixTimestampInto(str string, loc *time.Location, pd *ParsedDate) bool
 	if !ok {
 		return false
 	}
-	pd.SetDate(t.Year(), int(t.Month()), t.Day())
-	pd.SetTime(t.Hour(), t.Minute(), t.Second())
-	if t.Nanosecond() != 0 {
-		pd.SetFraction(float64(t.Nanosecond()) / 1e9)
+	// PHP reports @N as an absolute 1970-01-01 00:00:00 UTC plus a relative
+	// offset of N seconds. Fractional seconds are parsed but discarded.
+	seconds := int64(0)
+	if str[0] == '@' {
+		body := str[1:]
+		if idx := strings.Index(body, "."); idx >= 0 {
+			body = body[:idx]
+		}
+		if space := strings.Index(body, " "); space >= 0 {
+			body = body[:space]
+		}
+		seconds, _ = strconv.ParseInt(body, 10, 64)
 	}
-	if t.Location() != loc {
-		setTZFromLocation(pd, t.Location(), t)
-	}
+	pd.SetDate(1970, 1, 1)
+	pd.SetTime(0, 0, 0)
+	pd.SetFraction(0)
+	pd.IsLocaltime = true
+	pd.ZoneType = 1
+	pd.Zone = 0
+	pd.IsDST = false
+	pd.sourceLoc = time.UTC
+	pd.relative().Second = int(seconds)
 	pd.setMaterialized(t)
+	pd.relativeApplied = true
 	return true
 }
 
 func parseKeywordInto(str string, now time.Time, loc *time.Location, pd *ParsedDate) bool {
-	t, ok := tryKeyword(str, now, loc)
-	if !ok {
-		return false
+	switch str {
+	case "now":
+		// PHP leaves every component false for "now".
+		pd.setMaterialized(now)
+		return true
+	case "today":
+		pd.SetTime(0, 0, 0)
+		pd.SetFraction(0)
+		y, m, d := now.Date()
+		pd.setMaterialized(time.Date(y, m, d, 0, 0, 0, 0, loc))
+		return true
+	case "midnight":
+		pd.SetTime(0, 0, 0)
+		pd.SetFraction(0)
+		y, m, d := now.Date()
+		pd.setMaterialized(time.Date(y, m, d, 0, 0, 0, 0, loc))
+		return true
+	case "noon":
+		pd.SetTime(12, 0, 0)
+		pd.SetFraction(0)
+		y, m, d := now.Date()
+		pd.setMaterialized(time.Date(y, m, d, 12, 0, 0, 0, loc))
+		return true
+	case "tomorrow":
+		pd.SetTime(0, 0, 0)
+		pd.SetFraction(0)
+		pd.AddRelative(UnitDay, 1)
+		t := now.AddDate(0, 0, 1)
+		y, m, d := t.Date()
+		pd.setMaterialized(time.Date(y, m, d, 0, 0, 0, 0, loc))
+		pd.relativeApplied = true
+		return true
+	case "yesterday":
+		pd.SetTime(0, 0, 0)
+		pd.SetFraction(0)
+		pd.AddRelative(UnitDay, -1)
+		t := now.AddDate(0, 0, -1)
+		y, m, d := t.Date()
+		pd.setMaterialized(time.Date(y, m, d, 0, 0, 0, 0, loc))
+		pd.relativeApplied = true
+		return true
 	}
-	pd.SetDate(t.Year(), int(t.Month()), t.Day())
-	pd.SetTime(t.Hour(), t.Minute(), t.Second())
-	pd.setMaterialized(t)
-	return true
+	return false
 }
 
 func parseDateWithRelativeTimeInto(str string, now time.Time, loc *time.Location, opts []Option, pd *ParsedDate) bool {
@@ -676,13 +908,28 @@ func parseDateWithRelativeTimeInto(str string, now time.Time, loc *time.Location
 }
 
 func tryWeekdayPrefixReparseInto(str string, now time.Time, loc *time.Location, opts []Option, pd *ParsedDate) bool {
+	// Peek at the weekday prefix before delegating, so we can record the
+	// matching weekday in the relative block (PHP reports Thu/Fri/Sun as
+	// weekday indexes on RFC2822-ish inputs).
+	_, dayNum, stripped := stripWeekdayPrefix(str)
+
 	t, ok := tryWeekdayPrefixReparse(str, now, loc, opts)
 	if !ok {
 		return false
 	}
 	pd.SetDate(t.Year(), int(t.Month()), t.Day())
-	if t.Hour() != 0 || t.Minute() != 0 || t.Second() != 0 {
+	// Always record time when a weekday prefix was present (PHP includes
+	// hour/minute/second=0 even when the input omitted the time).
+	if stripped {
 		pd.SetTime(t.Hour(), t.Minute(), t.Second())
+	} else if t.Hour() != 0 || t.Minute() != 0 || t.Second() != 0 {
+		pd.SetTime(t.Hour(), t.Minute(), t.Second())
+	}
+	if stripped && dayNum >= 0 {
+		pd.SetRelativeWeekday(dayNum)
+	}
+	if t.Location() != loc {
+		setTZFromLocation(pd, t.Location(), t)
 	}
 	pd.setMaterialized(t)
 	return true
@@ -763,13 +1010,7 @@ func setTZFromLocation(pd *ParsedDate, loc *time.Location, t time.Time) {
 		return
 	}
 
-	// UTC / GMT: treat as abbreviation with offset 0 (zone_type 2).
-	isDST := false
-	// Heuristic DST: compare with Jan 1 offset in same location.
-	if _, janOff := time.Date(t.Year(), 1, 1, 0, 0, 0, 0, loc).Zone(); janOff != offset {
-		isDST = true
-	}
-	pd.SetTZAbbreviation(loc, strings.ToUpper(name), offset, isDST)
+	applyAbbreviationTZ(pd, loc, name, offset)
 }
 
 // setTZFromName records timezone metadata given the original name string
@@ -780,19 +1021,78 @@ func setTZFromName(pd *ParsedDate, name string, loc *time.Location) {
 		return
 	}
 	// Numeric offset?
-	if len(name) > 0 && (name[0] == '+' || name[0] == '-' || strings.EqualFold(name, "z")) {
+	if len(name) > 0 && (name[0] == '+' || name[0] == '-') {
 		offset := computeOffsetSeconds(name)
 		pd.SetTZOffset(loc, offset)
 		return
 	}
-	// Abbreviation
+	// PHP treats "Z" as an abbreviation.
+	if strings.EqualFold(name, "Z") {
+		pd.SetTZAbbreviation(time.UTC, "Z", 0, false)
+		return
+	}
+	// Abbreviation (EST, GMT, PDT, etc.) — use the caller-supplied location
+	// to read the current offset.
 	now := time.Now()
 	_, offset := now.In(loc).Zone()
-	isDST := false
-	if _, janOff := time.Date(now.Year(), 1, 1, 0, 0, 0, 0, loc).Zone(); janOff != offset {
-		isDST = true
+	applyAbbreviationTZ(pd, loc, name, offset)
+}
+
+// applyAbbreviationTZ records the timezone metadata for an abbreviation like
+// EST/GMT/PDT with PHP-specific quirks:
+//   - UTC is zone_type 3 and includes both tz_abbr and tz_id.
+//   - DST abbreviations (e.g. PDT, EDT) report the *standard* offset in zone
+//     and set is_dst:true, matching PHP's timelib.
+func applyAbbreviationTZ(pd *ParsedDate, loc *time.Location, abbr string, offset int) {
+	upper := strings.ToUpper(abbr)
+
+	// UTC: zone_type 3 with both tz_id and tz_abbr.
+	if upper == "UTC" {
+		pd.IsLocaltime = true
+		pd.ZoneType = 3
+		pd.Zone = 0
+		pd.IsDST = false
+		pd.TzAbbr = "UTC"
+		pd.TzID = "UTC"
+		pd.sourceLoc = loc
+		return
 	}
-	pd.SetTZAbbreviation(loc, strings.ToUpper(name), offset, isDST)
+
+	// Check whether this abbreviation is a DST form. PHP emits the standard
+	// offset for DST abbreviations and sets is_dst:true.
+	if stdOffset, isDST, ok := dstAbbreviationOffset(upper); ok {
+		pd.SetTZAbbreviation(loc, upper, stdOffset, isDST)
+		return
+	}
+
+	pd.SetTZAbbreviation(loc, upper, offset, false)
+}
+
+// dstAbbreviationOffset returns the standard-time offset (in seconds) and
+// is_dst flag for a PHP-recognised timezone abbreviation. Returns ok=false
+// for unknown abbreviations so the caller falls back to the parsed offset.
+func dstAbbreviationOffset(upper string) (offset int, isDST, ok bool) {
+	switch upper {
+	case "EDT":
+		return -5 * 3600, true, true
+	case "CDT":
+		return -6 * 3600, true, true
+	case "MDT":
+		return -7 * 3600, true, true
+	case "PDT":
+		return -8 * 3600, true, true
+	case "AKDT":
+		return -9 * 3600, true, true
+	case "BST":
+		return 0, true, true
+	case "CEST":
+		return 1 * 3600, true, true
+	case "EEST":
+		return 2 * 3600, true, true
+	case "AEDT":
+		return 10 * 3600, true, true
+	}
+	return 0, false, false
 }
 
 // canonicalTZName returns the canonical IANA identifier for a matched name.
