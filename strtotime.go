@@ -8,96 +8,6 @@ import (
 	"time"
 )
 
-// formatParser is the signature for format-specific parsers in the parser pipeline.
-type formatParser func(str string, now time.Time, loc *time.Location, opts []Option) (time.Time, bool)
-
-// formatParsers is the ordered list of format parsers tried by StrToTime.
-// The order is critical for PHP compatibility — do not reorder without testing.
-var formatParsers = []formatParser{
-	guardDigit(wrapLoc(parseEuropeanFormat)), // "15.01.2023" — starts with digit
-	guardPrefix("front of ", "back of ")(wrapNow(parseFrontBackOf)),
-	guardDigit(wrapLoc(parseRomanNumeralDate)), // "20 VI. 2005" — starts with digit
-	guardPrefix("0000-00-00")(wrapLoc(parseZeroDate)),
-	guardByte('-', '+')(wrapLoc(parseSignedYear)),
-	wrapLoc(parseISO8601),                     // many formats, cheap internal guards
-	wrapLoc(parseDateTimeFormat),              // "YYYY-MM-DD HH:MM:SS"
-	wrapLoc(parseWithTimezone),                // various
-	wrapLoc(parseISOFormat),                   // "YYYY-MM-DD"
-	guardDigit(wrapNow(parseLargeYearAsTime)), // "10000-01-01" (compact time + month-day)
-	guardDigit(wrapLoc(parseYearMonthFormat)), // "YYYY-MM"
-	guardDigit(wrapLoc(parseSlashFormat)),     // "YYYY/MM/DD"
-	guardDigit(wrapLoc(parseUSFormat)),        // "MM/DD/YYYY"
-	guardDigit(wrapLoc(parseUSDateWithTime)),  // "MM/DD/YYYY H:MM AM"
-	guardDigit(wrapLoc(parseShortYearUSDateWithMilitaryTime)),
-	guardDigit(wrapLoc(parseCompactTimestamp)), // "YYYYMMDDHHMMSS"
-	wrapNow(parseCompactTimeFormats),           // "t0222", "022233", etc.
-	wrapLoc(parseMonthNameFormat),              // "Jan-15-2006"
-	guardDigit(wrapLoc(parseHTTPLogFormat)),    // "10/Oct/2000:..."
-	wrapLoc(parseDateTimeTZRelative),           // "2004-10-31 EDT +1 hour"
-	wrapLoc(parseDateWithTZ),                   // "2014-01-01 Asia/Tokyo"
-	wrapNow(parseDayMonthYear),                 // "26th Nov 2005"
-	wrapLoc(parseMonthYearOnly),                // "Oct 2001"
-	guardDigit(wrapLoc(parseTimeBeforeDate)),   // "19:30 Dec 17 2005"
-	wrapLoc(parseMonthDayTimeYear),             // "Dec 17 19:30 2005"
-	wrapNow(parseFirstLastDayOfDate),           // "first day of 2010-01"
-	wrapNow(parseNumberedWeekday),              // "first Monday December 2008"
-}
-
-// guardDigit wraps a parser to only call it if the input starts with a digit.
-func guardDigit(fn formatParser) formatParser {
-	return func(str string, now time.Time, loc *time.Location, opts []Option) (time.Time, bool) {
-		if len(str) == 0 || str[0] < '0' || str[0] > '9' {
-			return time.Time{}, false
-		}
-		return fn(str, now, loc, opts)
-	}
-}
-
-// guardByte wraps a parser to only call it if the input starts with one of the given bytes.
-func guardByte(bytes ...byte) func(formatParser) formatParser {
-	return func(fn formatParser) formatParser {
-		return func(str string, now time.Time, loc *time.Location, opts []Option) (time.Time, bool) {
-			if len(str) == 0 {
-				return time.Time{}, false
-			}
-			for _, b := range bytes {
-				if str[0] == b {
-					return fn(str, now, loc, opts)
-				}
-			}
-			return time.Time{}, false
-		}
-	}
-}
-
-// guardPrefix wraps a parser to only call it if the input starts with one of the given prefixes.
-func guardPrefix(prefixes ...string) func(formatParser) formatParser {
-	return func(fn formatParser) formatParser {
-		return func(str string, now time.Time, loc *time.Location, opts []Option) (time.Time, bool) {
-			for _, p := range prefixes {
-				if strings.HasPrefix(str, p) {
-					return fn(str, now, loc, opts)
-				}
-			}
-			return time.Time{}, false
-		}
-	}
-}
-
-// wrapLoc wraps a (str, loc) parser into a formatParser.
-func wrapLoc(fn func(string, *time.Location) (time.Time, bool)) formatParser {
-	return func(str string, now time.Time, loc *time.Location, opts []Option) (time.Time, bool) {
-		return fn(str, loc)
-	}
-}
-
-// wrapNow wraps a (str, now, loc) parser into a formatParser.
-func wrapNow(fn func(string, time.Time, *time.Location) (time.Time, bool)) formatParser {
-	return func(str string, now time.Time, loc *time.Location, opts []Option) (time.Time, bool) {
-		return fn(str, now, loc)
-	}
-}
-
 // resolveOptions processes StrToTime options and returns the base time and location.
 func resolveOptions(opts []Option) (time.Time, *time.Location) {
 	var now time.Time
@@ -235,57 +145,75 @@ func StrToTime(str string, opts ...Option) (time.Time, error) {
 		return time.Time{}, ErrEmptyTimeString
 	}
 
-	// Unix timestamp (@...)
-	if result, ok := tryParseUnixTimestamp(str, loc); ok {
-		return result, nil
+	pd := newParsedDate()
+	if !dispatchStrToTime(str, now, loc, opts, pd) {
+		return time.Time{}, fmt.Errorf("unable to parse time string: %s", str)
 	}
-
-	// Keywords (now, today, tomorrow, yesterday, midnight, noon)
-	if result, ok := tryKeyword(str, now, loc); ok {
-		return result, nil
+	if pd.ErrorCount > 0 {
+		return time.Time{}, fmt.Errorf("unable to parse time string: %s: %s", str, pd.firstError())
 	}
+	return pd.Materialize(now, loc)
+}
 
-	// Try each format parser in order
+// dispatchStrToTime runs the shared parse pipeline and returns true if any
+// stage matched. It is also the body of DateParse (with a zero base time).
+func dispatchStrToTime(str string, now time.Time, loc *time.Location, opts []Option, pd *ParsedDate) bool {
+	if parseUnixTimestampInto(str, loc, pd) {
+		return true
+	}
+	if parseKeywordInto(str, now, loc, pd) {
+		return true
+	}
 	for _, parser := range formatParsers {
-		if result, ok := parser(str, now, loc, opts); ok {
-			return result, nil
+		sub := newParsedDate()
+		if parser(str, now, loc, opts, sub) {
+			copyComponents(pd, sub)
+			if sub.hasMaterialized {
+				pd.setMaterialized(sub.materialized)
+			}
+			if sub.Relative != nil {
+				pd.Relative = sub.Relative
+			}
+			return true
 		}
 	}
-
-	// Date followed by relative time adjustment: "2023-05-30 -1 month"
-	if result, ok := parseDateWithRelativeTime(str, now, loc, opts); ok {
-		return result, nil
+	if parseDateWithRelativeTimeInto(str, now, loc, opts, pd) {
+		return true
 	}
-
-	// Weekday prefix stripping + reparse: "Sun 2017-01-01", "Fri Aug 20 1993 23:59:59"
-	if result, ok := tryWeekdayPrefixReparse(str, now, loc, opts); ok {
-		return result, nil
+	if tryWeekdayPrefixReparseInto(str, now, loc, opts, pd) {
+		return true
 	}
-
-	// Compound expression (contains + or - in the middle)
 	if isCompoundExpression(str) {
-		return parseCompoundExpression(str, now, opts)
+		if t, err := parseCompoundExpression(str, now, opts); err == nil {
+			pd.SetDate(t.Year(), int(t.Month()), t.Day())
+			pd.SetTime(t.Hour(), t.Minute(), t.Second())
+			pd.setMaterialized(t)
+			return true
+		} else {
+			pd.AddError(0, err.Error())
+			return false
+		}
+	}
+	if parseOrdinalDateInto(str, now, loc, pd) {
+		return true
 	}
 
-	// Ordinal date: "26th Nov"
-	if result, ok := parseOrdinalDate(str, now, loc); ok {
-		return result, nil
-	}
-
-	// Fall through to token-based parser
 	parser := &Parser{
 		tokens:   Tokenize(str),
 		position: 0,
 		result:   now,
 		loc:      loc,
+		pd:       pd,
 	}
-
 	result, err := parser.Parse()
 	if err != nil {
-		return time.Time{}, fmt.Errorf("unable to parse time string: %s: %w", str, err)
+		pd.AddError(0, err.Error())
+		return false
 	}
-
-	return result, nil
+	// Token parser populates pd directly; also record a materialized fallback
+	// in case the mutations missed fields (safety net during refactor).
+	pd.setMaterialized(result)
+	return true
 }
 
 // Parser represents a token stream parser for time expressions
@@ -294,8 +222,9 @@ type Parser struct {
 	position   int
 	result     time.Time
 	loc        *time.Location
-	tzFound    bool // Flag to indicate if a timezone was parsed from the input
-	monthFound bool // Flag to indicate if a month name was parsed (affects 4-digit number interpretation)
+	tzFound    bool        // Flag to indicate if a timezone was parsed from the input
+	monthFound bool        // Flag to indicate if a month name was parsed (affects 4-digit number interpretation)
+	pd         *ParsedDate // optional; when non-nil, tryParse* methods populate components
 }
 
 // Parse processes the token stream and returns a time.Time result
