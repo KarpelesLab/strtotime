@@ -575,9 +575,61 @@ func parseNumberedWeekdayInto(str string, now time.Time, loc *time.Location, opt
 	if !ok {
 		return false
 	}
+	// "first day of next/last/this month/year" is purely relative; report it
+	// as such rather than as an absolute date derived from a zero base time.
+	if ordinal, unit, direction, isRelFirstLast := detectRelativeFirstLastDay(str); isRelFirstLast {
+		if ordinal == 1 {
+			pd.SetFirstLastDayOf(1)
+		} else {
+			pd.SetFirstLastDayOf(2)
+		}
+		var amount int
+		switch direction {
+		case DirectionNext:
+			amount = 1
+		case DirectionLast:
+			amount = -1
+		}
+		if amount != 0 {
+			pd.AddRelative(unit, amount)
+		}
+		pd.setMaterialized(t)
+		pd.relativeApplied = true
+		return true
+	}
 	pd.SetDate(t.Year(), int(t.Month()), t.Day())
 	pd.setMaterialized(t)
 	return true
+}
+
+// detectRelativeFirstLastDay recognises "first/last day of next/last/this
+// month/year" inputs and returns the ordinal (1 or -1), unit (month/year),
+// direction, and true. Otherwise returns false.
+func detectRelativeFirstLastDay(str string) (ordinal int, unit string, direction string, ok bool) {
+	fields := strings.Fields(str)
+	if len(fields) != 5 {
+		return 0, "", "", false
+	}
+	switch strings.ToLower(fields[0]) {
+	case "first":
+		ordinal = 1
+	case "last":
+		ordinal = -1
+	default:
+		return 0, "", "", false
+	}
+	if strings.ToLower(fields[1]) != "day" || strings.ToLower(fields[2]) != "of" {
+		return 0, "", "", false
+	}
+	direction = strings.ToLower(fields[3])
+	if direction != DirectionNext && direction != DirectionLast && direction != "this" {
+		return 0, "", "", false
+	}
+	unit = normalizeTimeUnit(fields[4])
+	if unit != UnitMonth && unit != UnitYear {
+		return 0, "", "", false
+	}
+	return ordinal, unit, direction, true
 }
 
 // --- post-pipeline Into adapters ---

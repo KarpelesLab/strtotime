@@ -174,6 +174,9 @@ func dispatchStrToTime(str string, now time.Time, loc *time.Location, opts []Opt
 			if sub.Relative != nil {
 				pd.Relative = sub.Relative
 			}
+			if sub.relativeApplied {
+				pd.relativeApplied = true
+			}
 			return true
 		}
 	}
@@ -210,9 +213,12 @@ func dispatchStrToTime(str string, now time.Time, loc *time.Location, opts []Opt
 		pd.AddError(0, err.Error())
 		return false
 	}
-	// Token parser populates pd directly; also record a materialized fallback
-	// in case the mutations missed fields (safety net during refactor).
+	// Token parser mutates p.result in place, so the returned time already
+	// has any relative offsets baked in. Record relativeApplied so that
+	// Materialize doesn't double-apply the Relative block the parser also
+	// populated for DateParse reporting.
 	pd.setMaterialized(result)
+	pd.relativeApplied = true
 	return true
 }
 
@@ -646,6 +652,9 @@ func (p *Parser) tryParseNextLastExpression() (time.Time, bool, error) {
 	// Check if it's a day of the week
 	dayNum := getDayOfWeek(unitToken.Val)
 	if dayNum >= 0 {
+		if p.pd != nil {
+			p.pd.SetRelativeWeekday(dayNum)
+		}
 		// Handle day of week
 		currentDay := int(p.result.Weekday())
 		if isThis {
@@ -678,12 +687,26 @@ func (p *Parser) tryParseNextLastExpression() (time.Time, bool, error) {
 	// Handle other time units
 	switch unitToken.Val {
 	case UnitMonth:
+		if p.pd != nil {
+			if isNext {
+				p.pd.AddRelative(UnitMonth, 1)
+			} else if !isThis {
+				p.pd.AddRelative(UnitMonth, -1)
+			}
+		}
 		if isNext {
 			return p.result.AddDate(0, 1, 0), true, nil
 		} else {
 			return p.result.AddDate(0, -1, 0), true, nil
 		}
 	case UnitYear:
+		if p.pd != nil {
+			if isNext {
+				p.pd.AddRelative(UnitYear, 1)
+			} else if !isThis {
+				p.pd.AddRelative(UnitYear, -1)
+			}
+		}
 		if isNext {
 			return p.result.AddDate(1, 0, 0), true, nil
 		} else {
@@ -815,6 +838,9 @@ func (p *Parser) applyTimeUnitOffset(amount int, unitStr string) (time.Time, err
 	canonical := normalizeTimeUnit(unitStr)
 	switch canonical {
 	case UnitDay, UnitWeek, UnitWeekDay, UnitMonth, UnitYear, UnitHour, UnitMinute, UnitSecond:
+		if p.pd != nil {
+			p.pd.AddRelative(canonical, amount)
+		}
 		return applyTimeOffset(p.result, amount, unitStr), nil
 	default:
 		return time.Time{}, fmt.Errorf("%w: %s", ErrInvalidTimeUnit, unitStr)
@@ -1261,6 +1287,9 @@ func (p *Parser) tryParseBareWeekday() (time.Time, bool, error) {
 	}
 
 	// Bare weekday name — PHP returns same day if base matches, else next occurrence
+	if p.pd != nil {
+		p.pd.SetRelativeWeekday(dayNum)
+	}
 	currentDay := int(p.result.Weekday())
 	daysUntil := (dayNum - currentDay + 7) % 7
 	nextDay := p.result.AddDate(0, 0, daysUntil)
@@ -1340,17 +1369,29 @@ func (p *Parser) tryParseFirstLastDayOfExpression() (time.Time, bool, error) {
 		if direction == DirectionNext {
 			ref := firstOfCurrent.AddDate(0, 1, 0)
 			year, month, _ = ref.Date()
+			if p.pd != nil {
+				p.pd.AddRelative(UnitMonth, 1)
+			}
 		} else if direction == DirectionLast {
 			ref := firstOfCurrent.AddDate(0, -1, 0)
 			year, month, _ = ref.Date()
+			if p.pd != nil {
+				p.pd.AddRelative(UnitMonth, -1)
+			}
 		}
 	case UnitYear:
 		if direction == DirectionNext {
 			year = p.result.Year() + 1
 			month = time.January
+			if p.pd != nil {
+				p.pd.AddRelative(UnitYear, 1)
+			}
 		} else if direction == DirectionLast {
 			year = p.result.Year() - 1
 			month = time.December
+			if p.pd != nil {
+				p.pd.AddRelative(UnitYear, -1)
+			}
 		}
 	default:
 		p.position = startPos
@@ -1362,6 +1403,14 @@ func (p *Parser) tryParseFirstLastDayOfExpression() (time.Time, bool, error) {
 		day = 1
 	} else {
 		day = daysInMonth(year, month)
+	}
+
+	if p.pd != nil {
+		if isFirst {
+			p.pd.SetFirstLastDayOf(1)
+		} else {
+			p.pd.SetFirstLastDayOf(2)
+		}
 	}
 
 	return time.Date(year, month, day, p.result.Hour(), p.result.Minute(), p.result.Second(), 0, p.loc), true, nil

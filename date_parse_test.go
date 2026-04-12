@@ -125,6 +125,25 @@ func TestDateParse_Relative(t *testing.T) {
 			},
 			wantAbsYear: 2023.0,
 		},
+		{
+			name: "bare weekday (relative)",
+			in:   "next monday",
+			wantRel: map[string]any{
+				"year": 0.0, "month": 0.0, "day": 0.0,
+				"hour": 0.0, "minute": 0.0, "second": 0.0,
+				"weekday": 1.0,
+			},
+			wantAbsYear: false,
+		},
+		{
+			name: "first day of next month (relative)",
+			in:   "first day of next month",
+			wantRel: map[string]any{
+				"year": 0.0, "month": 1.0, "day": 0.0,
+				"hour": 0.0, "minute": 0.0, "second": 0.0,
+			},
+			wantAbsYear: false,
+		},
 	}
 
 	for _, tc := range tests {

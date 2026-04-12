@@ -41,6 +41,11 @@ type ParsedDate struct {
 	sourceLoc       *time.Location // explicit timezone parsed from input
 	materialized    time.Time      // when a parser couldn't cleanly decompose
 	hasMaterialized bool
+	// relativeApplied records that the parser already folded the Relative
+	// block into the materialized time. Materialize will then skip
+	// re-applying Relative (avoids double-counting). Used by the token-based
+	// parser which mutates time.Time directly as it parses.
+	relativeApplied bool
 }
 
 // Relative captures the relative-time portion of a parsed expression.
@@ -253,7 +258,7 @@ func (pd *ParsedDate) setMaterialized(t time.Time) {
 // the base date is assembled. Returns an error if the extracted date or time
 // components are themselves invalid (e.g. month 13).
 func (pd *ParsedDate) Materialize(now time.Time, loc *time.Location) (time.Time, error) {
-	if pd.hasMaterialized && pd.Relative == nil {
+	if pd.hasMaterialized && (pd.Relative == nil || pd.relativeApplied) {
 		return pd.materialized, nil
 	}
 
@@ -265,6 +270,9 @@ func (pd *ParsedDate) Materialize(now time.Time, loc *time.Location) (time.Time,
 	var t time.Time
 	if pd.hasMaterialized {
 		t = pd.materialized
+		if pd.relativeApplied {
+			return t, nil
+		}
 	} else {
 		baseNow := now
 		if effectiveLoc != nil && baseNow.Location() != effectiveLoc {
