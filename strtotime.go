@@ -1405,11 +1405,14 @@ func (p *Parser) tryParseFirstLastDayOfExpression() (time.Time, bool, error) {
 
 	switch unit {
 	case UnitMonth:
+		// Use day=1 as reference to avoid overflow (e.g., Jan 31 + 1 month
+		// would produce March 2, but "first day of next month" must land in Feb).
+		firstOfCurrent := time.Date(year, month, 1, 0, 0, 0, 0, p.loc)
 		if direction == DirectionNext {
-			ref := p.result.AddDate(0, 1, 0)
+			ref := firstOfCurrent.AddDate(0, 1, 0)
 			year, month, _ = ref.Date()
 		} else if direction == DirectionLast {
-			ref := p.result.AddDate(0, -1, 0)
+			ref := firstOfCurrent.AddDate(0, -1, 0)
 			year, month, _ = ref.Date()
 		}
 	case UnitYear:

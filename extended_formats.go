@@ -815,7 +815,11 @@ func parseFirstLastDayOfDate(str string, now time.Time, loc *time.Location) (tim
 				var refTime time.Time
 				switch unit {
 				case UnitMonth:
-					refTime = now.AddDate(0, amount, 0)
+					// Use day=1 as reference to avoid overflow (e.g., Jan 31
+					// + 1 month would produce March 2 via time.AddDate, but
+					// "first day of +1 month" must land in Feb).
+					firstOfCurrent := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, loc)
+					refTime = firstOfCurrent.AddDate(0, amount, 0)
 				case UnitYear:
 					refTime = now.AddDate(amount, 0, 0)
 				default:
@@ -1228,12 +1232,16 @@ func parseNumberedWeekday(str string, now time.Time, loc *time.Location) (time.T
 
 		switch unit {
 		case UnitMonth:
+			// Use day=1 as reference to avoid overflow when base day doesn't
+			// exist in the target month (e.g., Jan 31 → "next month" must
+			// resolve within Feb, not overflow into March).
+			firstOfCurrent := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, loc)
 			if direction == DirectionNext {
-				ref := now.AddDate(0, 1, 0)
+				ref := firstOfCurrent.AddDate(0, 1, 0)
 				month = ref.Month()
 				year = ref.Year()
 			} else if direction == DirectionLast {
-				ref := now.AddDate(0, -1, 0)
+				ref := firstOfCurrent.AddDate(0, -1, 0)
 				month = ref.Month()
 				year = ref.Year()
 			} else {

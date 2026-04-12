@@ -686,3 +686,19 @@ may,1749945600,UTC,1747267200
 "first monday of this year",1775908800,UTC,1775433600
 "1 tuesday",1776168000,UTC,1776168000
 "first tuesday",1776168000,UTC,1776729600
+"first day of next month",1706702400,UTC,1706788800
+"last day of next month",1706702400,UTC,1709208000
+"first day of +1 month",1706702400,UTC,1706788800
+"last day of +1 month",1706702400,UTC,1709208000
+"last thursday of next month",1706702400,UTC,1709164800
+"first monday of next month",1706702400,UTC,1707091200
+"third friday of next month",1706702400,UTC,1708041600
+"first day of next month",1711886400,UTC,1711972800
+"last day of next month",1711886400,UTC,1714478400
+"first day of last month",1711886400,UTC,1706788800
+"last day of last month",1711886400,UTC,1709208000
+"last thursday of next month",1711886400,UTC,1714003200
+"first day of next month",1675166400,UTC,1675252800
+"last day of next month",1675166400,UTC,1677585600
+"first day of next month",1717156800,UTC,1717243200
+"last day of next month",1717156800,UTC,1719748800
