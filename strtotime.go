@@ -716,6 +716,8 @@ func (p *Parser) tryParseNextLastExpression() (time.Time, bool, error) {
 	switch unitToken.Val {
 	case UnitMonth:
 		if p.pd != nil {
+			// PHP always emits the relative block for this/next/last X.
+			p.pd.relative()
 			if isNext {
 				p.pd.AddRelative(UnitMonth, 1)
 			} else if !isThis {
@@ -729,6 +731,7 @@ func (p *Parser) tryParseNextLastExpression() (time.Time, bool, error) {
 		}
 	case UnitYear:
 		if p.pd != nil {
+			p.pd.relative()
 			if isNext {
 				p.pd.AddRelative(UnitYear, 1)
 			} else if !isThis {
@@ -749,6 +752,20 @@ func (p *Parser) tryParseNextLastExpression() (time.Time, bool, error) {
 
 // isCompoundExpression checks if a string is a compound time expression (contains + or - in the middle)
 func isCompoundExpression(str string) bool {
+	// Don't classify a numeric timezone suffix (+09:00, -0500) as a compound
+	// expression. A trailing " +HHMM" / " +HH:MM" / " -HHMM" is a TZ marker.
+	if idx := strings.LastIndexAny(str, "+-"); idx > 0 && str[idx-1] == ' ' {
+		tail := str[idx:]
+		if _, _, ok := parseNumericTimezoneOffset(tail); ok {
+			trimmed := strings.TrimSpace(str[:idx])
+			// If the prefix contains no other +/- in the middle, this isn't
+			// a compound expression.
+			if !containsInfixSign(trimmed) {
+				return false
+			}
+		}
+	}
+
 	// Normalize spaces around operators
 	spaceOperatorRe := strings.NewReplacer(" + ", "+", " - ", "-", "+ ", "+", "- ", "-")
 	normalizedStr := spaceOperatorRe.Replace(str)
@@ -756,6 +773,16 @@ func isCompoundExpression(str string) bool {
 	// Check if we have + or - in the middle of the string (not at the start)
 	return (strings.Contains(normalizedStr, "+") && !strings.HasPrefix(normalizedStr, "+")) ||
 		(strings.Contains(normalizedStr, "-") && !strings.HasPrefix(normalizedStr, "-"))
+}
+
+// containsInfixSign reports whether s has a '+' or '-' after position 0.
+func containsInfixSign(s string) bool {
+	for i := 1; i < len(s); i++ {
+		if s[i] == '+' || s[i] == '-' {
+			return true
+		}
+	}
+	return false
 }
 
 // parseDateWithRelativeTime parses a date followed by a relative time adjustment

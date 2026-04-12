@@ -21,8 +21,10 @@ var formatParsers = []componentParser{
 	guardDigit(wrapDateOnly(parseRomanNumeralDate)),
 	guardPrefix("0000-00-00")(parseZeroDateInto),
 	guardByte('-', '+')(parseSignedYearInto),
+	guardByte('-', '+')(parseBareNumericOffsetInto),
 	parseISO8601Into,
 	parseDateTimeFormatInto,
+	parseTimeWithNumericOffsetInto,
 	parseWithTimezoneInto,
 	wrapDateOnly(parseISOFormat),
 	guardDigit(parseLargeYearAsTimeInto),
@@ -31,6 +33,7 @@ var formatParsers = []componentParser{
 	guardDigit(wrapDateOnly(parseUSFormat)),
 	guardDigit(parseUSDateWithTimeInto),
 	guardDigit(parseShortYearUSDateWithMilitaryTimeInto),
+	guardDigit(parseCompactDateWithTimeInto),
 	guardDigit(parseCompactTimestampInto),
 	parseCompactTimeFormatsInto,
 	parseMonthNameFormatInto,
@@ -99,6 +102,94 @@ func wrapDateOnly(fn func(string, *time.Location) (time.Time, bool)) componentPa
 	}
 }
 
+// parseCompactDateWithTimeInto matches "YYYYMMDD HH:MM[:SS]" — the 8-digit
+// compact date followed by a colon-style time.
+func parseCompactDateWithTimeInto(str string, now time.Time, loc *time.Location, opts []Option, pd *ParsedDate) bool {
+	fields := strings.Fields(str)
+	if len(fields) != 2 {
+		return false
+	}
+	if len(fields[0]) != 8 || !isAllDigits(fields[0]) {
+		return false
+	}
+	if !strings.Contains(fields[1], ":") {
+		return false
+	}
+	year, _ := strconv.Atoi(fields[0][:4])
+	month, _ := strconv.Atoi(fields[0][4:6])
+	day, _ := strconv.Atoi(fields[0][6:8])
+	if !IsValidDate(year, month, day) {
+		return false
+	}
+	h, m, s, _, ok := parseFlexTime(fields[1])
+	if !ok {
+		return false
+	}
+	pd.SetDate(year, month, day)
+	pd.SetTime(h, m, s)
+	pd.setMaterialized(time.Date(year, time.Month(month), day, h, m, s, 0, loc))
+	return true
+}
+
+// parseBareNumericOffsetInto matches a standalone numeric TZ like "+0900".
+// PHP reports is_localtime=true, zone_type=1 with the offset, and no date or
+// time components set.
+func parseBareNumericOffsetInto(str string, now time.Time, loc *time.Location, opts []Option, pd *ParsedDate) bool {
+	s := strings.TrimSpace(str)
+	if len(s) < 3 || (s[0] != '+' && s[0] != '-') {
+		return false
+	}
+	tzLoc, consumed, ok := parseNumericTimezoneOffset(s)
+	if !ok || consumed != len(s) {
+		return false
+	}
+	pd.SetTZOffset(tzLoc, computeOffsetSeconds(s))
+	pd.setMaterialized(now.In(tzLoc))
+	return true
+}
+
+// parseTimeWithNumericOffsetInto matches "HH:MM[:SS][.frac] +HHMM / +HH:MM / -HHMM".
+// PHP emits hour/minute/second and a zone_type 1 numeric offset for this.
+func parseTimeWithNumericOffsetInto(str string, now time.Time, loc *time.Location, opts []Option, pd *ParsedDate) bool {
+	fields := strings.Fields(str)
+	if len(fields) != 2 {
+		return false
+	}
+	timePart := fields[0]
+	tzPart := fields[1]
+	if !strings.Contains(timePart, ":") {
+		return false
+	}
+	if len(tzPart) < 3 || (tzPart[0] != '+' && tzPart[0] != '-') {
+		return false
+	}
+	if _, _, ok := parseNumericTimezoneOffset(tzPart); !ok {
+		return false
+	}
+
+	h, m, s, consumed, ok := parseFlexTime(timePart)
+	if !ok {
+		return false
+	}
+	hasFrac := false
+	var frac float64
+	if consumed < len(timePart) && timePart[consumed] == '.' {
+		fs := timePart[consumed+1:]
+		if f, err := strconv.ParseFloat("0."+fs, 64); err == nil {
+			frac = f
+			hasFrac = true
+		}
+	}
+
+	pd.SetTime(h, m, s)
+	if hasFrac {
+		pd.SetFraction(frac)
+	}
+	pd.SetTZOffset(loc, computeOffsetSeconds(tzPart))
+	pd.setMaterialized(time.Date(now.Year(), now.Month(), now.Day(), h, m, s, int(frac*1e9), loc))
+	return true
+}
+
 // --- Into adapters (each wraps a specific legacy parser) ---
 
 func parseZeroDateInto(str string, now time.Time, loc *time.Location, opts []Option, pd *ParsedDate) bool {
@@ -140,12 +231,12 @@ func parseSignedYearInto(str string, now time.Time, loc *time.Location, opts []O
 
 func parseISO8601Into(str string, now time.Time, loc *time.Location, opts []Option, pd *ParsedDate) bool {
 	// Week date: YYYY-Www[-D] — PHP represents this as year-Jan-1 plus a
-	// relative day offset equal to (week-1)*7 + (dayOfWeek-1).
+	// relative day offset derived from the ISO week calendar.
 	if t, ok := parseISOWeekDate(str, loc); ok {
 		year, week, dayOfWeek := extractWeekDateParts(str)
 		if year > 0 {
 			pd.SetDate(year, 1, 1)
-			days := (week-1)*7 + dayOfWeek
+			days := isoWeekDayOffset(year, week, dayOfWeek)
 			if days != 0 {
 				pd.AddRelative(UnitDay, days)
 			}
@@ -299,7 +390,15 @@ func parseDateTimeFormatInto(str string, now time.Time, loc *time.Location, opts
 	if t.Nanosecond() != 0 {
 		pd.SetFraction(float64(t.Nanosecond()) / 1e9)
 	}
-	if t.Location() != loc {
+	// Record an explicit trailing timezone even when t.Location() == loc
+	// (e.g. both UTC). This recovers cases like "2023-01-01 00:00 Z".
+	if tzStr, ok := lastFieldLooksLikeTZ(str); ok {
+		if tzStr[0] == '+' || tzStr[0] == '-' {
+			pd.SetTZOffset(t.Location(), computeOffsetSeconds(tzStr))
+		} else if resolved, found := tryParseTimezone(tzStr); found {
+			setTZFromName(pd, tzStr, resolved)
+		}
+	} else if t.Location() != loc {
 		setTZFromLocation(pd, t.Location(), t)
 	}
 	pd.setMaterialized(t)
@@ -311,6 +410,23 @@ func parseWithTimezoneInto(str string, now time.Time, loc *time.Location, opts [
 	if !ok {
 		return false
 	}
+	// Time-only + TZ ("14:30 PST", "10:00 UTC"): record only the time and
+	// the TZ, not the date (PHP reports year/month/day as false).
+	if isTimeOnlyWithTimezoneInput(str) {
+		pd.SetTime(t.Hour(), t.Minute(), t.Second())
+		fields := strings.Fields(str)
+		if len(fields) > 0 {
+			tzStr := fields[len(fields)-1]
+			if resolved, found := tryParseTimezone(tzStr); found {
+				setTZFromName(pd, tzStr, resolved)
+			} else {
+				setTZFromLocation(pd, t.Location(), t)
+			}
+		}
+		pd.setMaterialized(t)
+		return true
+	}
+
 	pd.SetDate(t.Year(), int(t.Month()), t.Day())
 	if strings.Contains(str, ":") {
 		pd.SetTime(t.Hour(), t.Minute(), t.Second())
@@ -322,6 +438,15 @@ func parseWithTimezoneInto(str string, now time.Time, loc *time.Location, opts [
 	}
 	pd.setMaterialized(t)
 	return true
+}
+
+// isTimeOnlyWithTimezoneInput reports whether str looks like "HH:MM[:SS] <tz>".
+func isTimeOnlyWithTimezoneInput(str string) bool {
+	fields := strings.Fields(str)
+	if len(fields) != 2 {
+		return false
+	}
+	return strings.Contains(fields[0], ":") && !strings.Contains(fields[0], "-") && !strings.Contains(fields[0], "/") && !strings.Contains(fields[0], ".")
 }
 
 func parseLargeYearAsTimeInto(str string, now time.Time, loc *time.Location, opts []Option, pd *ParsedDate) bool {
@@ -713,6 +838,20 @@ func parseNumberedWeekdayInto(str string, now time.Time, loc *time.Location, opt
 	pd.SetDate(t.Year(), int(t.Month()), t.Day())
 	pd.setMaterialized(t)
 	return true
+}
+
+// isoWeekDayOffset returns the number of days from Jan 1 of `year` to the
+// specified ISO week-day. The offset may be negative (e.g. 2020-W01-1 falls
+// on 2019-12-30) or > 365 (W53 days in a short year).
+func isoWeekDayOffset(year, week, dayOfWeek int) int {
+	jan4 := time.Date(year, 1, 4, 0, 0, 0, 0, time.UTC)
+	dow4 := int(jan4.Weekday())
+	if dow4 == 0 {
+		dow4 = 7
+	}
+	w1Mon := 4 - (dow4 - 1) // day-of-year of week 1's Monday (may be negative)
+	doy := w1Mon + (week-1)*7 + (dayOfWeek - 1)
+	return doy - 1
 }
 
 // extractWeekDateParts parses "YYYY-Www[-D]" or "YYYYWww[D]" and returns
