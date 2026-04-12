@@ -153,6 +153,67 @@ this year
 2 hours ago
 30 minutes ago
 20200101 10:00
+2023-07-15 14:30:45 America/Los_Angeles
+2023-07-15T14:30:45 Asia/Tokyo
+2023-07-15T14:30:45.123456
+2000-01-01T00:00:00
+2038-01-19T03:14:07
+1901-12-13T20:45:52
+2023-06-15 14:00
+Jan 1, 1970
+December 31, 2099
+15th June 2023
+23rd Feb 1999
+Feb 23, 1999
+Saturday, November 25 2023
+November 2023
+2023W01
+2023W011
++2 weeks 3 days
+1 day 2 hours
+5 hours 30 minutes
+3 hours 15 minutes 5 seconds
++3 days 10:00:00
+2023-01-01T10:00:00.123456Z
+2023-01-01T10:00:00.123456789Z
+2023-01-01T10:00:00.1Z
+2023-01-01T10:00:00.12+09:00
+1.1.2020
+1.1.2020 12:00
+31-12-1999
+01-Jan-2023
+1-Jan-23
+2023-1-1
+2023-01-1
+2023-1-01
+1-1-2023
+1/1/2023
+12/1/2023
+00:00:00
+00:00
+23:59:59
+12:00 PM
+12:00 AM
+12:30 AM
+12:30 PM
+1:00 am
+11:59 pm
+00:00:00 UTC
+23:59:59 +0100
++00:00
+-12:00
+Z
+UTC
+GMT
+EST
+PST
+Asia/Tokyo
+Europe/London
+America/New_York
+first Tuesday of December 2020
+second Monday of March 2023
+last Friday of July 2024
+third thursday
 2020-001
 2020-W01
 2020-W53

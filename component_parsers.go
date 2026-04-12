@@ -46,6 +46,7 @@ var formatParsers = []componentParser{
 	parseMonthDayTimeYearInto,
 	parseFirstLastDayOfDateInto,
 	parseNumberedWeekdayInto,
+	parseBareTimezoneInto,
 }
 
 // --- guards (componentParser flavor) ---
@@ -100,6 +101,35 @@ func wrapDateOnly(fn func(string, *time.Location) (time.Time, bool)) componentPa
 		pd.setMaterialized(t)
 		return true
 	}
+}
+
+// parseBareTimezoneInto matches a standalone timezone string like "UTC",
+// "EST", "Z", "Asia/Tokyo". PHP reports is_localtime=true plus the
+// appropriate zone_type, and no date or time components.
+func parseBareTimezoneInto(str string, now time.Time, loc *time.Location, opts []Option, pd *ParsedDate) bool {
+	s := strings.TrimSpace(str)
+	if strings.ContainsAny(s, " \t") {
+		return false
+	}
+	// Reject obvious non-TZ forms (digits, punctuation, etc.).
+	for _, c := range s {
+		if !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '/' || c == '_' || c == '-') {
+			return false
+		}
+	}
+	// Special-case "Z".
+	if strings.EqualFold(s, "Z") {
+		pd.SetTZAbbreviation(time.UTC, "Z", 0, false)
+		pd.setMaterialized(now.In(time.UTC))
+		return true
+	}
+	resolved, found := tryParseTimezone(s)
+	if !found {
+		return false
+	}
+	setTZFromName(pd, s, resolved)
+	pd.setMaterialized(now.In(resolved))
+	return true
 }
 
 // parseCompactDateWithTimeInto matches "YYYYMMDD HH:MM[:SS]" — the 8-digit
@@ -546,13 +576,9 @@ func parseMonthNameFormatInto(str string, now time.Time, loc *time.Location, opt
 	if !ok {
 		return false
 	}
-	// PHP omits the year when the input didn't contain one (e.g. "Dec 25").
-	if hasFourDigitYear(str) {
-		pd.SetDate(t.Year(), int(t.Month()), t.Day())
-	} else {
-		pd.SetMonth(int(t.Month()))
-		pd.SetDay(t.Day())
-	}
+	// parseMonthNameFormat's recognised shapes (Jan-15-2006 / 2006-Jan-15 /
+	// 15-Jan-2006 / 15-Jan-99) always carry a year, so record it.
+	pd.SetDate(t.Year(), int(t.Month()), t.Day())
 	pd.setMaterialized(t)
 	return true
 }
@@ -829,8 +855,36 @@ func parseNumberedWeekdayInto(str string, now time.Time, loc *time.Location, opt
 			pd.SetFirstLastDayOf(2)
 		}
 		pd.SetDate(t.Year(), int(t.Month()), 1)
-		// The materialized t from parseNumberedWeekday already resolved the
-		// correct day; use it so StrToTime keeps working.
+		pd.setMaterialized(t)
+		pd.relativeApplied = true
+		return true
+	}
+	// "<ordinal> <weekday> of <Month> <Year>" → PHP reports year/month/day=1
+	// with hour/min/sec/fraction=0 and a relative block carrying the
+	// weekday and day-offset (N-1)*7 or -7.
+	if info, ok := detectOrdinalWeekdayOfMonthYear(str); ok {
+		pd.SetDate(info.year, info.month, 1)
+		pd.SetTime(0, 0, 0)
+		pd.SetFraction(0)
+		pd.SetRelativeWeekday(info.weekday)
+		if info.ordinal == -1 {
+			pd.AddRelative(UnitDay, -7)
+		} else if info.ordinal > 1 {
+			pd.AddRelative(UnitDay, (info.ordinal-1)*7)
+		}
+		pd.setMaterialized(t)
+		pd.relativeApplied = true
+		return true
+	}
+	// "<ordinal> <weekday>" without month context → year/month/day=false,
+	// hour/min/sec/fraction=0, relative.day = (N-1)*7, relative.weekday = W.
+	if info, ok := detectOrdinalWeekdayOnly(str); ok {
+		pd.SetTime(0, 0, 0)
+		pd.SetFraction(0)
+		pd.SetRelativeWeekday(info.weekday)
+		if info.ordinal > 1 {
+			pd.AddRelative(UnitDay, (info.ordinal-1)*7)
+		}
 		pd.setMaterialized(t)
 		pd.relativeApplied = true
 		return true
@@ -838,6 +892,65 @@ func parseNumberedWeekdayInto(str string, now time.Time, loc *time.Location, opt
 	pd.SetDate(t.Year(), int(t.Month()), t.Day())
 	pd.setMaterialized(t)
 	return true
+}
+
+type ordinalWeekdayInfo struct {
+	ordinal int // 1..5 or -1 for "last"
+	weekday int // 0=Sun..6=Sat (PHP convention)
+	year    int
+	month   int
+}
+
+// detectOrdinalWeekdayOfMonthYear matches "<ordinal> <weekday> of <Month> <Year>".
+func detectOrdinalWeekdayOfMonthYear(str string) (info ordinalWeekdayInfo, ok bool) {
+	fields := strings.Fields(str)
+	if len(fields) != 5 {
+		return info, false
+	}
+	ord, _, _, parsed := parseOrdinalPrefix(fields, 0)
+	if !parsed {
+		return info, false
+	}
+	info.ordinal = ord
+	dow := getDayOfWeek(fields[1])
+	if dow < 0 {
+		return info, false
+	}
+	info.weekday = dow
+	if strings.ToLower(fields[2]) != "of" {
+		return info, false
+	}
+	month, isMonth := getMonthByNameFlex(fields[3])
+	if !isMonth {
+		return info, false
+	}
+	info.month = int(month)
+	y, err := strconv.Atoi(fields[4])
+	if err != nil {
+		return info, false
+	}
+	info.year = y
+	return info, true
+}
+
+// detectOrdinalWeekdayOnly matches a bare "<ordinal> <weekday>" with no
+// month context (e.g. "third thursday").
+func detectOrdinalWeekdayOnly(str string) (info ordinalWeekdayInfo, ok bool) {
+	fields := strings.Fields(str)
+	if len(fields) != 2 {
+		return info, false
+	}
+	ord, _, _, parsed := parseOrdinalPrefix(fields, 0)
+	if !parsed {
+		return info, false
+	}
+	info.ordinal = ord
+	dow := getDayOfWeek(fields[1])
+	if dow < 0 {
+		return info, false
+	}
+	info.weekday = dow
+	return info, true
 }
 
 // isoWeekDayOffset returns the number of days from Jan 1 of `year` to the
