@@ -214,6 +214,33 @@ first Tuesday of December 2020
 second Monday of March 2023
 last Friday of July 2024
 third thursday
+01:02:03
+11:22
+5:05:05
+5am
+5pm
+8:30am
+8:30 am
+8:30 a.m.
+8:30 p.m.
+12:30:45.678
+12:30:45.678901
+22:49:12.42 GMT
+22:49:12.42+0200
+22:49:12.42+02:00
+-00:05:00
++05:45
+Asia/Kolkata
+Pacific/Honolulu
+2023-03-12T02:30:00 America/New_York
+2023-11-05T01:30:00 America/New_York
+2023-01-15 14:30:45.5
+Tue, 15 Feb 2022 18:00:00 GMT
+Mon, 2 Jan 2023 09:15:00 JST
+Sun, 31 Dec 2023 23:59:59 +0000
+1970
+9999
+@-1000000000
 2020-001
 2020-W01
 2020-W53

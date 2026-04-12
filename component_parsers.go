@@ -25,6 +25,7 @@ var formatParsers = []componentParser{
 	parseISO8601Into,
 	parseDateTimeFormatInto,
 	parseTimeWithNumericOffsetInto,
+	parseTimeWithNamedTZInto,
 	parseWithTimezoneInto,
 	wrapDateOnly(parseISOFormat),
 	guardDigit(parseLargeYearAsTimeInto),
@@ -103,6 +104,53 @@ func wrapDateOnly(fn func(string, *time.Location) (time.Time, bool)) componentPa
 	}
 }
 
+// parseTimeWithNamedTZInto matches "HH:MM[:SS][.frac] <TZname>" where
+// <TZname> is an abbreviation, IANA identifier, or "Z". Emits time plus TZ
+// metadata, no date.
+func parseTimeWithNamedTZInto(str string, now time.Time, loc *time.Location, opts []Option, pd *ParsedDate) bool {
+	fields := strings.Fields(str)
+	if len(fields) != 2 {
+		return false
+	}
+	timePart := fields[0]
+	tzStr := fields[1]
+	if !strings.Contains(timePart, ":") {
+		return false
+	}
+	if len(tzStr) == 0 || tzStr[0] == '+' || tzStr[0] == '-' {
+		return false
+	}
+	if _, found := tryParseTimezone(tzStr); !found && !strings.EqualFold(tzStr, "Z") {
+		return false
+	}
+
+	h, m, s, consumed, ok := parseFlexTime(timePart)
+	if !ok {
+		return false
+	}
+	hasFrac := false
+	var frac float64
+	if consumed < len(timePart) && timePart[consumed] == '.' {
+		fs := timePart[consumed+1:]
+		if f, err := strconv.ParseFloat("0."+fs, 64); err == nil {
+			frac = f
+			hasFrac = true
+		}
+	}
+
+	pd.SetTime(h, m, s)
+	if hasFrac {
+		pd.SetFraction(frac)
+	}
+	if strings.EqualFold(tzStr, "Z") {
+		pd.SetTZAbbreviation(time.UTC, "Z", 0, false)
+	} else if resolved, found := tryParseTimezone(tzStr); found {
+		setTZFromName(pd, tzStr, resolved)
+	}
+	pd.setMaterialized(time.Date(now.Year(), now.Month(), now.Day(), h, m, s, int(frac*1e9), loc))
+	return true
+}
+
 // parseBareTimezoneInto matches a standalone timezone string like "UTC",
 // "EST", "Z", "Asia/Tokyo". PHP reports is_localtime=true plus the
 // appropriate zone_type, and no date or time components.
@@ -161,13 +209,19 @@ func parseCompactDateWithTimeInto(str string, now time.Time, loc *time.Location,
 	return true
 }
 
-// parseBareNumericOffsetInto matches a standalone numeric TZ like "+0900".
-// PHP reports is_localtime=true, zone_type=1 with the offset, and no date or
-// time components set.
+// parseBareNumericOffsetInto matches a standalone numeric TZ like "+0900",
+// "-12:00", or "-00:05:00". PHP reports is_localtime=true, zone_type=1 with
+// the offset, and no date or time components set.
 func parseBareNumericOffsetInto(str string, now time.Time, loc *time.Location, opts []Option, pd *ParsedDate) bool {
 	s := strings.TrimSpace(str)
 	if len(s) < 3 || (s[0] != '+' && s[0] != '-') {
 		return false
+	}
+	// Try an extended "±HH:MM:SS" form that PHP accepts.
+	if offset, ok := parseHMSOffset(s); ok {
+		pd.SetTZOffset(fixedZone(offset), offset)
+		pd.setMaterialized(now.In(fixedZone(offset)))
+		return true
 	}
 	tzLoc, consumed, ok := parseNumericTimezoneOffset(s)
 	if !ok || consumed != len(s) {
@@ -178,25 +232,32 @@ func parseBareNumericOffsetInto(str string, now time.Time, loc *time.Location, o
 	return true
 }
 
-// parseTimeWithNumericOffsetInto matches "HH:MM[:SS][.frac] +HHMM / +HH:MM / -HHMM".
-// PHP emits hour/minute/second and a zone_type 1 numeric offset for this.
-func parseTimeWithNumericOffsetInto(str string, now time.Time, loc *time.Location, opts []Option, pd *ParsedDate) bool {
-	fields := strings.Fields(str)
-	if len(fields) != 2 {
-		return false
+// parseHMSOffset parses "±HH:MM:SS" and returns the total offset in seconds.
+func parseHMSOffset(s string) (int, bool) {
+	if len(s) != 9 || (s[0] != '+' && s[0] != '-') || s[3] != ':' || s[6] != ':' {
+		return 0, false
 	}
-	timePart := fields[0]
-	tzPart := fields[1]
-	if !strings.Contains(timePart, ":") {
-		return false
+	sign := 1
+	if s[0] == '-' {
+		sign = -1
 	}
-	if len(tzPart) < 3 || (tzPart[0] != '+' && tzPart[0] != '-') {
-		return false
+	if !isAllDigits(s[1:3]) || !isAllDigits(s[4:6]) || !isAllDigits(s[7:9]) {
+		return 0, false
 	}
-	if _, _, ok := parseNumericTimezoneOffset(tzPart); !ok {
-		return false
-	}
+	h, _ := strconv.Atoi(s[1:3])
+	m, _ := strconv.Atoi(s[4:6])
+	sec, _ := strconv.Atoi(s[7:9])
+	return sign * (h*3600 + m*60 + sec), true
+}
 
+// parseTimeWithNumericOffsetInto matches "HH:MM[:SS][.frac](+HHMM|+HH:MM|-HHMM)"
+// — optionally with a space separating the time and TZ. PHP emits hour/minute/
+// second and a zone_type 1 numeric offset for this shape.
+func parseTimeWithNumericOffsetInto(str string, now time.Time, loc *time.Location, opts []Option, pd *ParsedDate) bool {
+	timePart, tzPart, ok := splitTimeAndNumericTZ(str)
+	if !ok {
+		return false
+	}
 	h, m, s, consumed, ok := parseFlexTime(timePart)
 	if !ok {
 		return false
@@ -218,6 +279,46 @@ func parseTimeWithNumericOffsetInto(str string, now time.Time, loc *time.Locatio
 	pd.SetTZOffset(loc, computeOffsetSeconds(tzPart))
 	pd.setMaterialized(time.Date(now.Year(), now.Month(), now.Day(), h, m, s, int(frac*1e9), loc))
 	return true
+}
+
+// splitTimeAndNumericTZ splits "HH:MM[...]+HHMM" or "HH:MM[...] +HHMM" into
+// the time portion and the numeric offset portion. Either the time is
+// immediately followed by the sign (no whitespace) or the two are separated
+// by a single space. The entire tail after the sign must be the numeric
+// offset — otherwise we reject to avoid misparsing something like
+// "17:00 2004-01-01" where "-01" is part of a date.
+func splitTimeAndNumericTZ(str string) (timePart, tzPart string, ok bool) {
+	s := strings.TrimSpace(str)
+	if !strings.Contains(s, ":") {
+		return "", "", false
+	}
+	// Try space-separated form first: exactly two fields with TZ on right.
+	if idx := strings.IndexByte(s, ' '); idx > 0 {
+		left := s[:idx]
+		right := strings.TrimSpace(s[idx+1:])
+		if len(right) >= 3 && (right[0] == '+' || right[0] == '-') {
+			if loc, consumed, ok := parseNumericTimezoneOffset(right); ok && consumed == len(right) {
+				_ = loc
+				return left, right, true
+			}
+		}
+		return "", "", false
+	}
+	// No space: find the first '+' or '-' that appears after the colon.
+	colon := strings.IndexByte(s, ':')
+	if colon < 0 {
+		return "", "", false
+	}
+	for i := colon + 1; i < len(s); i++ {
+		if s[i] == '+' || s[i] == '-' {
+			candidate := s[i:]
+			if _, consumed, ok := parseNumericTimezoneOffset(candidate); ok && consumed == len(candidate) {
+				return s[:i], candidate, true
+			}
+			break
+		}
+	}
+	return "", "", false
 }
 
 // --- Into adapters (each wraps a specific legacy parser) ---
@@ -470,13 +571,14 @@ func parseWithTimezoneInto(str string, now time.Time, loc *time.Location, opts [
 	return true
 }
 
-// isTimeOnlyWithTimezoneInput reports whether str looks like "HH:MM[:SS] <tz>".
+// isTimeOnlyWithTimezoneInput reports whether str looks like "HH:MM[:SS][.frac] <tz>".
 func isTimeOnlyWithTimezoneInput(str string) bool {
 	fields := strings.Fields(str)
 	if len(fields) != 2 {
 		return false
 	}
-	return strings.Contains(fields[0], ":") && !strings.Contains(fields[0], "-") && !strings.Contains(fields[0], "/") && !strings.Contains(fields[0], ".")
+	t := fields[0]
+	return strings.Contains(t, ":") && !strings.Contains(t, "-") && !strings.Contains(t, "/")
 }
 
 func parseLargeYearAsTimeInto(str string, now time.Time, loc *time.Location, opts []Option, pd *ParsedDate) bool {

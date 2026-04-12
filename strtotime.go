@@ -1629,7 +1629,8 @@ func (p *Parser) tryParseTimeExpression() (time.Time, bool, error) {
 		}
 	}
 
-	// Optional trailing am/pm (with or without separating whitespace)
+	// Optional trailing am/pm (with or without separating whitespace).
+	// Also accepts PHP's dotted forms "a.m." / "p.m." as a 3-token sequence.
 	savedPos := p.position
 	p.skipWhitespace()
 	if p.position < len(p.tokens) && p.tokens[p.position].Typ == TypeString {
@@ -1646,6 +1647,17 @@ func (p *Parser) tryParseTimeExpression() (time.Time, bool, error) {
 			p.loc = time.UTC
 			p.tzFound = true
 			p.position++
+		case "a", "p":
+			// "a.m." / "p.m." — require ".m." follow-up.
+			if p.position+3 < len(p.tokens) &&
+				p.tokens[p.position+1].Typ == TypeOperator && p.tokens[p.position+1].Val == "." &&
+				p.tokens[p.position+2].Typ == TypeString && strings.ToLower(p.tokens[p.position+2].Val) == "m" &&
+				p.tokens[p.position+3].Typ == TypeOperator && p.tokens[p.position+3].Val == "." {
+				hour = applyAMPM(hour, tok+"m")
+				p.position += 4
+			} else {
+				p.position = savedPos
+			}
 		default:
 			p.position = savedPos
 		}
@@ -1762,6 +1774,9 @@ func (p *Parser) tryParseYearOnly() (time.Time, bool, error) {
 		}
 	}
 
+	if p.pd != nil {
+		p.pd.SetYear(num)
+	}
 	return time.Date(num, p.result.Month(), p.result.Day(), p.result.Hour(), p.result.Minute(), p.result.Second(), p.result.Nanosecond(), p.loc), true, nil
 }
 
