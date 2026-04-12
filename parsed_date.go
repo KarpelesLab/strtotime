@@ -507,6 +507,16 @@ func (r *Relative) MarshalJSON() ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
+// Time renders the ParsedDate into a time.Time using the current wall-clock
+// time for unset components and the caller-supplied location for unset
+// timezone. It is a convenience wrapper around Materialize.
+func (pd *ParsedDate) Time(loc *time.Location) (time.Time, error) {
+	if loc == nil {
+		loc = time.UTC
+	}
+	return pd.Materialize(time.Now().In(loc), loc)
+}
+
 // firstError returns the first recorded error as a Go error, suitable for
 // returning from StrToTime when DateParse found problems.
 func (pd *ParsedDate) firstError() error {

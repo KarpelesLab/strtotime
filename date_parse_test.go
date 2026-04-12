@@ -98,6 +98,27 @@ func TestDateParse_PHPShapes(t *testing.T) {
 	}
 }
 
+// TestDateParse_Errors ensures that unparseable inputs surface a non-zero
+// error_count and populate the errors map.
+func TestDateParse_Errors(t *testing.T) {
+	for _, in := range []string{
+		"garbage",
+		"not-a-date",
+		"abcdef",
+		"!@#$%^&*()",
+	} {
+		t.Run(in, func(t *testing.T) {
+			pd := DateParse(in)
+			if pd.ErrorCount == 0 {
+				t.Errorf("DateParse(%q): expected ErrorCount > 0", in)
+			}
+			if len(pd.Errors) == 0 {
+				t.Errorf("DateParse(%q): expected non-empty Errors map", in)
+			}
+		})
+	}
+}
+
 // TestDateParse_Relative asserts the "relative" block contents for inputs
 // containing relative offsets.
 func TestDateParse_Relative(t *testing.T) {

@@ -114,6 +114,30 @@ func main() {
 }
 ```
 
+### PHP-Compatible Date Parsing (`DateParse`)
+
+`DateParse(str)` returns a `*ParsedDate` describing exactly which components
+were present in the input — equivalent to PHP's `date_parse()`. Unlike
+`StrToTime`, it does not fold relative offsets into a `time.Time`; it
+reports them in a nested `relative` block.
+
+```go
+pd := strtotime.DateParse("2006-12-12T10:00:00.5+01:00")
+b, _ := json.Marshal(pd)
+fmt.Println(string(b))
+// {"year":2006,"month":12,"day":12,"hour":10,"minute":0,"second":0,
+//  "fraction":0.5,"warning_count":0,"warnings":[],"error_count":0,
+//  "errors":[],"is_localtime":true,"zone_type":1,"zone":3600,
+//  "is_dst":false}
+```
+
+Unset scalar fields marshal as `false`, matching PHP. Timezone metadata
+follows PHP's `zone_type`: `1` for UTC offsets, `2` for abbreviations, `3`
+for IANA identifiers. The `relative` block is included only when the input
+contained relative offsets (`+3 days`, `next monday`, …). You can
+materialize a `ParsedDate` back into a `time.Time` with `pd.Time(loc)` or
+`pd.Materialize(now, loc)`.
+
 ## Supported Date/Time Formats
 
 The library can understand many different formats and expressions, including:
