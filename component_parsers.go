@@ -603,14 +603,9 @@ func parseYearMonthFormatInto(str string, now time.Time, loc *time.Location, opt
 	if !ok {
 		return false
 	}
-	// Disambiguate YYYY-MM (month, no day) vs YYYY-DDD (day of year, day set).
-	parts := strings.SplitN(str, "-", 2)
-	if len(parts) == 2 && len(parts[1]) == 3 {
-		pd.SetDate(t.Year(), int(t.Month()), t.Day())
-	} else {
-		pd.SetYear(t.Year())
-		pd.SetMonth(int(t.Month()))
-	}
+	// PHP emits day=1 for YYYY-MM, and year/month/day all set for the
+	// ISO ordinal YYYY-DDD form.
+	pd.SetDate(t.Year(), int(t.Month()), t.Day())
 	pd.setMaterialized(t)
 	return true
 }
@@ -674,15 +669,40 @@ func parseCompactTimeFormatsInto(str string, now time.Time, loc *time.Location, 
 }
 
 func parseMonthNameFormatInto(str string, now time.Time, loc *time.Location, opts []Option, pd *ParsedDate) bool {
+	// Handle 2-part Jan-15 / 15-Jan forms that parseMonthNameFormat rejects.
+	if m, d, ok := parseTwoPartMonthDay(str); ok {
+		pd.SetMonth(m)
+		pd.SetDay(d)
+		pd.setMaterialized(time.Date(now.Year(), time.Month(m), d, 0, 0, 0, 0, loc))
+		return true
+	}
 	t, ok := parseMonthNameFormat(str, loc)
 	if !ok {
 		return false
 	}
-	// parseMonthNameFormat's recognised shapes (Jan-15-2006 / 2006-Jan-15 /
-	// 15-Jan-2006 / 15-Jan-99) always carry a year, so record it.
+	// parseMonthNameFormat's recognised 3-part shapes always carry a year.
 	pd.SetDate(t.Year(), int(t.Month()), t.Day())
 	pd.setMaterialized(t)
 	return true
+}
+
+// parseTwoPartMonthDay matches "Mon-DD" or "DD-Mon" (e.g. Jan-15 / 15-Jan).
+func parseTwoPartMonthDay(str string) (month, day int, ok bool) {
+	parts := strings.Split(str, "-")
+	if len(parts) != 2 {
+		return 0, 0, false
+	}
+	if m, isMonth := getMonthByNameFlex(parts[0]); isMonth {
+		if d, err := strconv.Atoi(parts[1]); err == nil && d >= 1 && d <= 31 {
+			return int(m), d, true
+		}
+	}
+	if m, isMonth := getMonthByNameFlex(parts[1]); isMonth {
+		if d, err := strconv.Atoi(parts[0]); err == nil && d >= 1 && d <= 31 {
+			return int(m), d, true
+		}
+	}
+	return 0, 0, false
 }
 
 // hasFourDigitYear reports whether str contains a 4-digit number that could

@@ -714,6 +714,22 @@ func (p *Parser) tryParseNextLastExpression() (time.Time, bool, error) {
 
 	// Handle other time units
 	switch unitToken.Val {
+	case UnitDay:
+		if p.pd != nil {
+			p.pd.relative()
+			if isNext {
+				p.pd.AddRelative(UnitDay, 1)
+			} else if !isThis {
+				p.pd.AddRelative(UnitDay, -1)
+			}
+		}
+		if isNext {
+			return p.result.AddDate(0, 0, 1), true, nil
+		}
+		if isThis {
+			return p.result, true, nil
+		}
+		return p.result.AddDate(0, 0, -1), true, nil
 	case UnitMonth:
 		if p.pd != nil {
 			// PHP always emits the relative block for this/next/last X.
@@ -743,6 +759,22 @@ func (p *Parser) tryParseNextLastExpression() (time.Time, bool, error) {
 		} else {
 			return p.result.AddDate(-1, 0, 0), true, nil
 		}
+	case UnitHour, UnitMinute, UnitSecond:
+		if p.pd != nil {
+			p.pd.relative()
+			if isNext {
+				p.pd.AddRelative(unitToken.Val, 1)
+			} else if !isThis {
+				p.pd.AddRelative(unitToken.Val, -1)
+			}
+		}
+		if isNext {
+			return applyTimeOffset(p.result, 1, unitToken.Val), true, nil
+		}
+		if isThis {
+			return p.result, true, nil
+		}
+		return applyTimeOffset(p.result, -1, unitToken.Val), true, nil
 	default:
 		return time.Time{}, false, fmt.Errorf("%w: %s", ErrInvalidTimeUnit, unitToken.Val)
 	}
