@@ -283,6 +283,41 @@ this second
 01:00:00 UTC
 12:34:56 Asia/Tokyo
 23:59:59-12:00
+20060502T230245-05
+20060502T230245+0200
+20060502T230245Z
+2006-05-02T23:02:45
+2006-05-02T23:02:45Z
+2006-05-02T23:02:45+00:00
+2038-01-19T03:14:08
+-0100
+-05:30
++12:00
++14:00
+-12:00
+Africa/Cairo
+Australia/Sydney
+Pacific/Auckland
+America/Argentina/Buenos_Aires
+Indian/Maldives
+Atlantic/Azores
+Jan 2020
+Feb 2020
+Apr 2020
+Sep 2020
+Dec 2020
+1st Jan 2020
+2nd feb 2020
+3rd mar 2020
+21st June 2023
+last Monday
+last Sunday
+next Sunday
+this Saturday
+3 days
+1 month
+-2 years
++10 hours
 2020-001
 2020-W01
 2020-W53
