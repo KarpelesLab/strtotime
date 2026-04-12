@@ -142,8 +142,11 @@ func (pd *ParsedDate) SetMinute(minute int) { pd.Minute = OptInt{V: minute, Set:
 // SetSecond records only the second.
 func (pd *ParsedDate) SetSecond(second int) { pd.Second = OptInt{V: second, Set: true} }
 
-// SetFraction records a fractional-second component.
+// SetFraction records a fractional-second component. PHP truncates the
+// fraction to microsecond precision (6 digits), so we match that behavior.
 func (pd *ParsedDate) SetFraction(f float64) {
+	// Truncate to microseconds.
+	f = float64(int64(f*1e6)) / 1e6
 	pd.Fraction = OptFloat{V: f, Set: true}
 }
 

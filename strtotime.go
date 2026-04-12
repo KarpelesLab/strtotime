@@ -119,6 +119,14 @@ func tryWeekdayPrefixReparse(str string, now time.Time, loc *time.Location, opts
 		return time.Time{}, false
 	}
 
+	// Don't strip the weekday when the remaining text is just a time
+	// keyword — PHP treats "Monday noon" as weekday + time offset, not
+	// "Monday" anchoring an absolute date.
+	switch restTrimmed {
+	case "noon", "midnight", "tomorrow", "yesterday", "today", "now":
+		return time.Time{}, false
+	}
+
 	// Propagate the effective location so DateParse (zero base time, UTC)
 	// doesn't leak the caller's local timezone into the reparse.
 	reparseOpts := append([]Option(nil), opts...)
@@ -1464,9 +1472,17 @@ func (p *Parser) tryParseTimeKeyword() (time.Time, bool, error) {
 	switch p.tokens[p.position].Val {
 	case "midnight":
 		p.position++
+		if p.pd != nil {
+			p.pd.SetTime(0, 0, 0)
+			p.pd.SetFraction(0)
+		}
 		return time.Date(year, month, day, 0, 0, 0, 0, p.loc), true, nil
 	case "noon":
 		p.position++
+		if p.pd != nil {
+			p.pd.SetTime(12, 0, 0)
+			p.pd.SetFraction(0)
+		}
 		return time.Date(year, month, day, 12, 0, 0, 0, p.loc), true, nil
 	default:
 		return time.Time{}, false, nil
@@ -1590,11 +1606,20 @@ func (p *Parser) tryParseTimeExpression() (time.Time, bool, error) {
 	savedPos := p.position
 	p.skipWhitespace()
 	if p.position < len(p.tokens) && p.tokens[p.position].Typ == TypeString {
-		ampm := strings.ToLower(p.tokens[p.position].Val)
-		if ampm == "am" || ampm == "pm" {
-			hour = applyAMPM(hour, ampm)
+		tok := strings.ToLower(p.tokens[p.position].Val)
+		switch tok {
+		case "am", "pm":
+			hour = applyAMPM(hour, tok)
 			p.position++
-		} else {
+		case "z":
+			// Trailing Z marks UTC (PHP treats it as abbreviation).
+			if p.pd != nil {
+				p.pd.SetTZAbbreviation(time.UTC, "Z", 0, false)
+			}
+			p.loc = time.UTC
+			p.tzFound = true
+			p.position++
+		default:
 			p.position = savedPos
 		}
 	} else {

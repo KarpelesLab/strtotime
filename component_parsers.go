@@ -951,7 +951,13 @@ func parseOrdinalDateInto(str string, now time.Time, loc *time.Location, pd *Par
 	if !ok {
 		return false
 	}
-	pd.SetDate(t.Year(), int(t.Month()), t.Day())
+	if hasFourDigitYear(str) {
+		pd.SetDate(t.Year(), int(t.Month()), t.Day())
+	} else {
+		pd.SetMonth(int(t.Month()))
+		pd.SetDay(t.Day())
+	}
+	pd.setMaterialized(t)
 	return true
 }
 
