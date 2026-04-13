@@ -388,4 +388,42 @@ this Saturday
 1st of January 2023
 2nd of February 2024
 31st of October 2023
+this minute
+this hour
+this second
+next second
+next hour
+last minute
+next minute
+last second
+2023-Jan-15
+Jan 15 2023 10:30 PM EST
+Jan 15 2023 10:30 AM PST
+last Sunday
+next Wednesday
+this Thursday
+first sunday of march 2023
+fifth Monday of January 2024
+1st Monday of December 2008
+2nd Tuesday of June 2023
+2023-01-15T14:30:45.999Z
+2023-01-15T14:30:45.999999+09:00
+2023/1/1
+Saturday, 31 December 2022
+Sunday, 01 January 2023 12:00
+Tue, 16 Mar 2021 23:59:59 UTC
+Sat, 1 Jan 2000 00:00:00 EST
+@0 UTC
+@1000
+@0.123456
+@1000.5
+2023-01
+1999-12-31
+2000-02-29
+2100-02-29
++0 days
+-0 days
++0
+-0
+0 seconds
 EOF

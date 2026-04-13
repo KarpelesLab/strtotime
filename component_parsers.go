@@ -471,12 +471,27 @@ func parseCompactDateWithTimeInto(str string, now time.Time, loc *time.Location,
 }
 
 // parseBareNumericOffsetInto matches a standalone numeric TZ like "+0900",
-// "-12:00", or "-00:05:00". PHP reports is_localtime=true, zone_type=1 with
-// the offset, and no date or time components set.
+// "-12:00", "-00:05:00", or a minimal "+0" / "-0". PHP reports
+// is_localtime=true, zone_type=1 with the offset, and no date or time
+// components set.
 func parseBareNumericOffsetInto(str string, now time.Time, loc *time.Location, opts []Option, pd *ParsedDate) bool {
 	s := strings.TrimSpace(str)
-	if len(s) < 3 || (s[0] != '+' && s[0] != '-') {
+	if len(s) < 2 || (s[0] != '+' && s[0] != '-') {
 		return false
+	}
+	// Single-digit offset forms like "+0" / "-0" / "+5": PHP accepts them.
+	if len(s) >= 2 && isAllDigits(s[1:]) && len(s) <= 3 {
+		h, _ := strconv.Atoi(s[1:])
+		if h <= 14 {
+			sign := 1
+			if s[0] == '-' {
+				sign = -1
+			}
+			offset := sign * h * 3600
+			pd.SetTZOffset(fixedZone(offset), offset)
+			pd.setMaterialized(now.In(fixedZone(offset)))
+			return true
+		}
 	}
 	// Try an extended "±HH:MM:SS" form that PHP accepts.
 	if offset, ok := parseHMSOffset(s); ok {
@@ -1134,6 +1149,11 @@ func parseDayMonthYearInto(str string, now time.Time, loc *time.Location, opts [
 	}
 	if stripped && dayNum >= 0 {
 		pd.SetRelativeWeekday(dayNum)
+		// PHP records hour/minute/second=0 when a weekday prefix is present.
+		if !pd.Hour.Set {
+			pd.SetTime(0, 0, 0)
+			pd.SetFraction(0)
+		}
 	}
 	pd.setMaterialized(t)
 	return true
@@ -1267,7 +1287,21 @@ func parseNumberedWeekdayInto(str string, now time.Time, loc *time.Location, opt
 		pd.SetTime(0, 0, 0)
 		pd.SetFraction(0)
 		pd.SetRelativeWeekday(info.weekday)
-		if info.ordinal == -1 {
+		// Digit-ordinals like "1st", "2nd", "31st" trigger PHP's quirky
+		// error pattern — word-ordinals ("first", "second") do not and
+		// also contribute a (N-1)*7 day offset.
+		if info.isDigit {
+			warnPos := len(info.ordinalDigits) + len(info.ordinalSuffix) + len(info.weekdayWord) + 2
+			pd.AddWarning(warnPos, "Double timezone specification")
+			pos := 0
+			for range info.ordinalDigits {
+				pd.AddError(pos, "Unexpected character")
+				pos++
+			}
+			pd.AddError(pos, "The timezone could not be found in the database")
+			pd.IsLocaltime = true
+			pd.ZoneType = 0
+		} else if info.ordinal == -1 {
 			pd.AddRelative(UnitDay, -7)
 		} else if info.ordinal > 1 {
 			pd.AddRelative(UnitDay, (info.ordinal-1)*7)
@@ -1295,10 +1329,14 @@ func parseNumberedWeekdayInto(str string, now time.Time, loc *time.Location, opt
 }
 
 type ordinalWeekdayInfo struct {
-	ordinal int // 1..5 or -1 for "last"
-	weekday int // 0=Sun..6=Sat (PHP convention)
-	year    int
-	month   int
+	ordinal        int    // 1..5 or -1 for "last"
+	weekday        int    // 0=Sun..6=Sat (PHP convention)
+	year           int
+	month          int
+	isDigit        bool   // digit-ordinal like "2nd"
+	ordinalDigits  string // digit portion, e.g. "2"
+	ordinalSuffix  string // suffix portion, e.g. "nd"
+	weekdayWord    string // weekday token as parsed
 }
 
 // detectOrdinalWeekdayOfMonthYear matches "<ordinal> <weekday> of <Month> <Year>".
@@ -1312,11 +1350,25 @@ func detectOrdinalWeekdayOfMonthYear(str string) (info ordinalWeekdayInfo, ok bo
 		return info, false
 	}
 	info.ordinal = ord
+	// Was the ordinal spelled with digits + suffix?
+	first := fields[0]
+	for _, sfx := range []string{"st", "nd", "rd", "th"} {
+		if strings.HasSuffix(strings.ToLower(first), sfx) {
+			digits := first[:len(first)-len(sfx)]
+			if len(digits) > 0 && isAllDigits(digits) {
+				info.isDigit = true
+				info.ordinalDigits = digits
+				info.ordinalSuffix = sfx
+			}
+			break
+		}
+	}
 	dow := getDayOfWeek(fields[1])
 	if dow < 0 {
 		return info, false
 	}
 	info.weekday = dow
+	info.weekdayWord = fields[1]
 	if strings.ToLower(fields[2]) != "of" {
 		return info, false
 	}
