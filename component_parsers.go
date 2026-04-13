@@ -49,6 +49,7 @@ var formatParsers = []componentParser{
 	parseMonthDayTimeYearInto,
 	parseFirstLastDayOfDateInto,
 	parseNumberedWeekdayInto,
+	guardDigit(parseOrdinalOfMonthYearInto),
 	parseBareTimezoneInto,
 	guardDigit(parseBareDigitsFallbackInto),
 }
@@ -350,6 +351,61 @@ func parseBareTimezoneInto(str string, now time.Time, loc *time.Location, opts [
 	pd.IsLocaltime = true
 	pd.ZoneType = 0
 	pd.AddError(0, "The timezone could not be found in the database")
+	return true
+}
+
+// parseOrdinalOfMonthYearInto matches PHP's "Nth of <Month> <Year>" quirk.
+// PHP ignores the ordinal portion (reports day=1), emits a "Double timezone
+// specification" warning at the position of the space before "of", and
+// produces sequential-array errors for the unexpected tail.
+func parseOrdinalOfMonthYearInto(str string, now time.Time, loc *time.Location, opts []Option, pd *ParsedDate) bool {
+	fields := strings.Fields(str)
+	if len(fields) != 4 {
+		return false
+	}
+	// First field: ordinal digits + suffix.
+	ordPart := fields[0]
+	suffix := ""
+	digits := ordPart
+	for _, sfx := range []string{"st", "nd", "rd", "th"} {
+		if strings.HasSuffix(strings.ToLower(ordPart), sfx) {
+			suffix = sfx
+			digits = ordPart[:len(ordPart)-len(sfx)]
+			break
+		}
+	}
+	if suffix == "" || digits == "" || !isAllDigits(digits) {
+		return false
+	}
+	if _, err := strconv.Atoi(digits); err != nil {
+		return false
+	}
+	if strings.ToLower(fields[1]) != "of" {
+		return false
+	}
+	month, isMonth := getMonthByNameFlex(fields[2])
+	if !isMonth {
+		return false
+	}
+	year, err := strconv.Atoi(fields[3])
+	if err != nil || year < 1 {
+		return false
+	}
+
+	pd.SetDate(year, int(month), 1)
+	// Warning at position 1 past the ordinal token.
+	pd.AddWarning(len(digits)+len(suffix)+1, "Double timezone specification")
+	// Sequential-key errors: one "Unexpected character" per ordinal digit,
+	// followed by a "The timezone could not be found in the database".
+	pos := 0
+	for range digits {
+		pd.AddError(pos, "Unexpected character")
+		pos++
+	}
+	pd.AddError(pos, "The timezone could not be found in the database")
+	pd.IsLocaltime = true
+	pd.ZoneType = 0
+	pd.setMaterialized(time.Date(year, month, 1, 0, 0, 0, 0, loc))
 	return true
 }
 
