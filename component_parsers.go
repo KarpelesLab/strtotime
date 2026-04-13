@@ -50,6 +50,7 @@ var formatParsers = []componentParser{
 	parseFirstLastDayOfDateInto,
 	parseNumberedWeekdayInto,
 	parseBareTimezoneInto,
+	guardDigit(parseBareDigitsFallbackInto),
 }
 
 // --- guards (componentParser flavor) ---
@@ -349,6 +350,38 @@ func parseBareTimezoneInto(str string, now time.Time, loc *time.Location, opts [
 	pd.IsLocaltime = true
 	pd.ZoneType = 0
 	pd.AddError(0, "The timezone could not be found in the database")
+	return true
+}
+
+// parseBareDigitsFallbackInto handles bare pure-digit inputs that aren't a
+// valid year and aren't a 4-digit HHMM. PHP:
+//   - 1..3 digits: one "Unexpected character" per digit (ignored as invalid)
+//   - 5+ digits: parse the first 4 as HHMM when valid, then one
+//     "Unexpected character" per trailing digit.
+func parseBareDigitsFallbackInto(str string, now time.Time, loc *time.Location, opts []Option, pd *ParsedDate) bool {
+	s := strings.TrimSpace(str)
+	if len(s) == 0 || !isAllDigits(s) {
+		return false
+	}
+	// 4-digit: handled by tryParseYearOnly (year / HHMM).
+	if len(s) == 4 {
+		return false
+	}
+	if len(s) >= 5 {
+		hh, _ := strconv.Atoi(s[:2])
+		mm, _ := strconv.Atoi(s[2:4])
+		if hh <= 24 && mm <= 59 {
+			pd.SetTime(hh, mm, 0)
+			pd.fractionDefaultsZero = false
+			for i := 4; i < len(s); i++ {
+				pd.AddError(i, "Unexpected character")
+			}
+			return true
+		}
+	}
+	for i := range s {
+		pd.AddError(i, "Unexpected character")
+	}
 	return true
 }
 
@@ -1387,13 +1420,22 @@ func parseUnixTimestampInto(str string, loc *time.Location, pd *ParsedDate) bool
 	// PHP reports @N as an absolute 1970-01-01 00:00:00 UTC plus a relative
 	// offset of N seconds. Fractional seconds are parsed but discarded.
 	seconds := int64(0)
+	hasExtraTZ := false
+	tzPos := 0
 	if str[0] == '@' {
 		body := str[1:]
+		// Detect a trailing " <tz>" — PHP emits "Double timezone
+		// specification" when present.
+		if space := strings.Index(body, " "); space >= 0 {
+			tzPos = len(str) - len(body[space:]) + 1 // 1 past the start of the TZ
+			trailer := strings.TrimSpace(body[space:])
+			if trailer != "" {
+				hasExtraTZ = true
+			}
+			body = body[:space]
+		}
 		if idx := strings.Index(body, "."); idx >= 0 {
 			body = body[:idx]
-		}
-		if space := strings.Index(body, " "); space >= 0 {
-			body = body[:space]
 		}
 		seconds, _ = strconv.ParseInt(body, 10, 64)
 	}
@@ -1406,6 +1448,9 @@ func parseUnixTimestampInto(str string, loc *time.Location, pd *ParsedDate) bool
 	pd.IsDST = false
 	pd.sourceLoc = time.UTC
 	pd.relative().Second = int(seconds)
+	if hasExtraTZ {
+		pd.AddWarning(tzPos, "Double timezone specification")
+	}
 	pd.setMaterialized(t)
 	pd.relativeApplied = true
 	return true

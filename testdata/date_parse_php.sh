@@ -234,6 +234,14 @@ Monday 2023-01-01
 -3 hours +10 minutes
 +1 day -2 hours
 -1 month +15 days
+@1234567890 Asia/Tokyo
+@1234567890 UTC
+@1000 +0900
+23
+123
+12345
+0
+99
 Friday tomorrow
 yesterday Monday
 tomorrow noon EST
