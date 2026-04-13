@@ -126,6 +126,12 @@ func tryWeekdayPrefixReparse(str string, now time.Time, loc *time.Location, opts
 	case "noon", "midnight", "tomorrow", "yesterday", "today", "now":
 		return time.Time{}, false
 	}
+	// Similarly reject when the rest is a bare time expression without any
+	// date component, so "Monday 10am" / "Tuesday 13:00" reach the token
+	// parser which records a weekday + time rather than anchoring today.
+	if restLooksLikeBareTime(restTrimmed) {
+		return time.Time{}, false
+	}
 
 	// Propagate the effective location so DateParse (zero base time, UTC)
 	// doesn't leak the caller's local timezone into the reparse.
@@ -146,6 +152,31 @@ func tryWeekdayPrefixReparse(str string, now time.Time, loc *time.Location, opts
 		t = t.AddDate(0, 0, daysUntil)
 	}
 	return t, true
+}
+
+// restLooksLikeBareTime reports whether s is a time-of-day expression that
+// lacks any date component (no dash/slash date markers, no 4-digit year).
+func restLooksLikeBareTime(s string) bool {
+	if strings.Contains(s, "-") || strings.Contains(s, "/") {
+		return false
+	}
+	// HH:MM / HH:MM:SS variants.
+	if strings.Contains(s, ":") && !strings.ContainsAny(s, "abcdefghijklmnopqrstuvwxyz") {
+		return true
+	}
+	// Bare hour + am/pm ("10am", "9 pm", "8:30 am").
+	lower := strings.ToLower(s)
+	if strings.HasSuffix(lower, "am") || strings.HasSuffix(lower, "pm") {
+		prefix := strings.TrimSpace(strings.TrimSuffix(strings.TrimSuffix(lower, "am"), "pm"))
+		for _, r := range prefix {
+			if (r >= '0' && r <= '9') || r == ':' || r == ' ' || r == '.' {
+				continue
+			}
+			return false
+		}
+		return len(prefix) > 0
+	}
+	return false
 }
 
 // StrToTime will convert the provided string into a time similarly to how PHP strtotime() works.
@@ -365,6 +396,17 @@ func (p *Parser) Parse() (time.Time, error) {
 		// Try bare hour with am/pm "10am", "10 pm"
 		if !parsed {
 			if t, ok, err := p.tryParseBareHourAMPM(); ok {
+				if err != nil {
+					return time.Time{}, err
+				}
+				p.result = t
+				parsed = true
+			}
+		}
+
+		// Try day keywords "tomorrow" / "yesterday" / "today" / "now"
+		if !parsed {
+			if t, ok, err := p.tryParseDayKeyword(); ok {
 				if err != nil {
 					return time.Time{}, err
 				}
@@ -1521,6 +1563,49 @@ func (p *Parser) tryParseFirstLastDayOfExpression() (time.Time, bool, error) {
 	return time.Date(year, month, day, p.result.Hour(), p.result.Minute(), p.result.Second(), 0, p.loc), true, nil
 }
 
+// tryParseDayKeyword handles "tomorrow" / "yesterday" / "today" / "now"
+// keywords when they appear as a token in the stream. PHP combines them with
+// other tokens by applying a day offset to the relative block and resetting
+// hour/minute/second/fraction to 0.
+func (p *Parser) tryParseDayKeyword() (time.Time, bool, error) {
+	if p.position >= len(p.tokens) || p.tokens[p.position].Typ != TypeString {
+		return time.Time{}, false, nil
+	}
+	switch p.tokens[p.position].Val {
+	case "tomorrow":
+		p.position++
+		if p.pd != nil {
+			p.pd.SetTime(0, 0, 0)
+			p.pd.SetFraction(0)
+			// Overwrite existing relative.day with +1 (replace semantics).
+			r := p.pd.relative()
+			r.Day = 1
+		}
+		return p.result.AddDate(0, 0, 1), true, nil
+	case "yesterday":
+		p.position++
+		if p.pd != nil {
+			p.pd.SetTime(0, 0, 0)
+			p.pd.SetFraction(0)
+			r := p.pd.relative()
+			r.Day = -1
+		}
+		return p.result.AddDate(0, 0, -1), true, nil
+	case "today":
+		p.position++
+		if p.pd != nil {
+			p.pd.SetTime(0, 0, 0)
+			p.pd.SetFraction(0)
+		}
+		y, m, d := p.result.Date()
+		return time.Date(y, m, d, 0, 0, 0, 0, p.loc), true, nil
+	case "now":
+		p.position++
+		return p.result, true, nil
+	}
+	return time.Time{}, false, nil
+}
+
 // tryParseTimeKeyword handles "midnight" and "noon" keywords in token stream
 func (p *Parser) tryParseTimeKeyword() (time.Time, bool, error) {
 	if p.position >= len(p.tokens) || p.tokens[p.position].Typ != TypeString {
@@ -1624,7 +1709,7 @@ func (p *Parser) tryParseTimeExpression() (time.Time, bool, error) {
 	}
 
 	hour, err := strconv.Atoi(p.tokens[p.position].Val)
-	if err != nil || hour < 0 || hour > 23 {
+	if err != nil || hour < 0 || hour > 24 {
 		return time.Time{}, false, nil
 	}
 	p.position += 2 // Skip HH:
@@ -1701,6 +1786,23 @@ func (p *Parser) tryParseTimeExpression() (time.Time, bool, error) {
 		p.pd.SetTime(hour, minute, second)
 		if hasFraction {
 			p.pd.SetFraction(fraction)
+		}
+		// PHP emits a warning when the time has hour == 24.
+		if hour == 24 {
+			// Position: first char after the parsed time tokens.
+			pos := 0
+			if p.position > 0 && p.position <= len(p.tokens) {
+				// Use start of next token if any, else len(input) + 1.
+				if p.position < len(p.tokens) {
+					pos = p.tokens[p.position].Pos
+				} else {
+					// Last parsed token
+					last := p.tokens[p.position-1]
+					pos = last.Pos + len(last.Val)
+				}
+				pos++ // PHP uses 1-past-end.
+			}
+			p.pd.AddWarning(pos, "The parsed time was invalid")
 		}
 	}
 	year, month, day := p.result.Date()

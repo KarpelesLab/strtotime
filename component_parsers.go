@@ -28,6 +28,8 @@ var formatParsers = []componentParser{
 	parseTimeWithNamedTZInto,
 	parseWithTimezoneInto,
 	wrapDateOnly(parseISOFormat),
+	guardDigit(parseInvalidISOFormatInto),
+	parseInvalidMonthNameDateInto,
 	guardDigit(parseLargeYearAsTimeInto),
 	parseYearMonthFormatInto,
 	guardDigit(wrapDateOnly(parseSlashFormat)),
@@ -102,6 +104,78 @@ func wrapDateOnly(fn func(string, *time.Location) (time.Time, bool)) componentPa
 		pd.setMaterialized(t)
 		return true
 	}
+}
+
+// parseInvalidMonthNameDateInto matches "<MonthName> DD YYYY" where DD is
+// out of range for that month. PHP still reports the components plus a
+// warning.
+func parseInvalidMonthNameDateInto(str string, now time.Time, loc *time.Location, opts []Option, pd *ParsedDate) bool {
+	fields := strings.Fields(str)
+	if len(fields) != 3 {
+		return false
+	}
+	m, isMonth := getMonthByNameFlex(fields[0])
+	if !isMonth {
+		return false
+	}
+	day, err := strconv.Atoi(strings.TrimSuffix(strings.TrimSuffix(strings.TrimSuffix(strings.TrimSuffix(fields[1], "st"), "nd"), "rd"), "th"))
+	if err != nil || day < 1 || day > 31 {
+		return false
+	}
+	year, err := strconv.Atoi(fields[2])
+	if err != nil || year < 1 || year > 9999 {
+		return false
+	}
+	if IsValidDate(year, int(m), day) {
+		return false
+	}
+	pd.SetDate(year, int(m), day)
+	pd.AddWarning(len(str)+1, "The parsed date was invalid")
+	pd.setMaterialized(time.Date(year, m, day, 0, 0, 0, 0, loc))
+	return true
+}
+
+// parseInvalidISOFormatInto catches ISO "YYYY-MM-DD" inputs whose components
+// are out of range (month 0, day 29 in Feb of non-leap, day > daysInMonth).
+// PHP still reports the year/month/day it saw plus a warning "The parsed
+// date was invalid" at position == len(str).
+func parseInvalidISOFormatInto(str string, now time.Time, loc *time.Location, opts []Option, pd *ParsedDate) bool {
+	if strings.Count(str, "-") != 2 {
+		return false
+	}
+	parts := strings.Split(str, "-")
+	if len(parts) != 3 {
+		return false
+	}
+	for _, p := range parts {
+		if !isAllDigits(p) || len(p) == 0 {
+			return false
+		}
+	}
+	// Only match 4-digit year form (YYYY-MM-DD).
+	if len(parts[0]) < 4 {
+		return false
+	}
+	y, _ := strconv.Atoi(parts[0])
+	m, _ := strconv.Atoi(parts[1])
+	d, _ := strconv.Atoi(parts[2])
+	if IsValidDate(y, m, d) {
+		return false
+	}
+	// Only accept "gently wrong" dates — month 0-12 and day within a wide
+	// range — so obviously-invalid inputs like 2023-99-99 still fail.
+	if m < 0 || m > 12 || d < 0 || d > 31 {
+		return false
+	}
+	pd.SetDate(y, m, d)
+	// PHP reports the warning position as len(str)+1 (one past the end of
+	// the parsed date portion).
+	pd.AddWarning(len(str)+1, "The parsed date was invalid")
+	// Materialize via Go's tolerant date arithmetic so StrToTime still
+	// returns a time.Time (matches the original behaviour before this
+	// refactor when validation was not enforced).
+	pd.setMaterialized(time.Date(y, time.Month(m), d, 0, 0, 0, 0, loc))
+	return true
 }
 
 // parseTimeWithNamedTZInto matches "HH:MM[:SS][.frac] <TZname>" where
@@ -1369,6 +1443,12 @@ func copyComponents(dst, src *ParsedDate) {
 		dst.TzAbbr = src.TzAbbr
 		dst.TzID = src.TzID
 		dst.sourceLoc = src.sourceLoc
+	}
+	for pos, msg := range src.Warnings {
+		dst.AddWarning(pos, msg)
+	}
+	for pos, msg := range src.Errors {
+		dst.AddError(pos, msg)
 	}
 }
 

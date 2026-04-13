@@ -101,6 +101,10 @@ next year
 last month
 this week
 2024-02-29
+2023-02-29
+2023-00-15
+2023-04-31
+Feb 29 2023
 2023-12-31T23:59:59
 2023-12-31T23:59:59Z
 2023-12-31T23:59:59+00:00
@@ -192,6 +196,18 @@ November 2023
 00:00:00
 00:00
 23:59:59
+24:00:00
+24:00
+tomorrow noon
+noon tomorrow
+yesterday noon
+tomorrow midnight
+10am tomorrow
+tomorrow 10am
+monday 10am
+noon Monday
+10:00 tomorrow
+Monday noon
 12:00 PM
 12:00 AM
 12:30 AM
@@ -214,6 +230,11 @@ first Tuesday of December 2020
 second Monday of March 2023
 last Friday of July 2024
 third thursday
+last Monday of December 2008
+last Sunday of August 2020
+fourth Wednesday of October 2025
+fifth Monday of March 2024
+last Saturday of February 2024
 01:02:03
 11:22
 5:05:05
