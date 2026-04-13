@@ -228,6 +228,12 @@ Monday 2023-01-01
 2020-100
 2023-01-01 +3 days 10:00:00
 2023-01-01 10:00:00 +3 days
+-1 week +2 days
++1 year +3 months
++2 weeks -1 day
+-3 hours +10 minutes
++1 day -2 hours
+-1 month +15 days
 Friday tomorrow
 yesterday Monday
 tomorrow noon EST

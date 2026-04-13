@@ -225,6 +225,81 @@ func parseTimeWithNamedTZInto(str string, now time.Time, loc *time.Location, opt
 	return true
 }
 
+// parseCompoundRelativeInto handles compound purely-relative inputs like
+// "-1 week +2 days" / "+1 year -2 months" / "-3 hours +10 minutes". The
+// result is reported as a relative-only ParsedDate with no absolute date.
+func parseCompoundRelativeInto(str string, now time.Time, loc *time.Location, opts []Option, pd *ParsedDate) bool {
+	normalizer := strings.NewReplacer(" + ", " +", " - ", " -", "+ ", "+", "- ", "-")
+	s := strings.TrimSpace(normalizer.Replace(str))
+
+	var parts []string
+	current := ""
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if (c == '+' || c == '-') && i > 0 && current != "" {
+			parts = append(parts, strings.TrimSpace(current))
+			current = string(c)
+		} else {
+			current += string(c)
+		}
+	}
+	if current != "" {
+		parts = append(parts, strings.TrimSpace(current))
+	}
+	if len(parts) < 2 {
+		return false
+	}
+
+	// Each part must be a pure relative expression: "[+-]N unit".
+	type relPart struct {
+		amount int
+		unit   string
+	}
+	var rels []relPart
+	for _, p := range parts {
+		sign := 1
+		body := p
+		if len(body) == 0 {
+			return false
+		}
+		switch body[0] {
+		case '+':
+			body = body[1:]
+		case '-':
+			sign = -1
+			body = body[1:]
+		}
+		body = strings.TrimSpace(body)
+		fields := strings.Fields(body)
+		if len(fields) != 2 {
+			return false
+		}
+		amount, err := strconv.Atoi(fields[0])
+		if err != nil {
+			return false
+		}
+		unit := normalizeTimeUnit(fields[1])
+		switch unit {
+		case UnitYear, UnitMonth, UnitWeek, UnitDay, UnitHour, UnitMinute, UnitSecond:
+		default:
+			return false
+		}
+		rels = append(rels, relPart{sign * amount, unit})
+	}
+
+	for _, r := range rels {
+		pd.AddRelative(r.unit, r.amount)
+	}
+	// Materialize for StrToTime so it still returns a meaningful time.Time.
+	t := now
+	for _, r := range rels {
+		t = applyTimeOffset(t, r.amount, r.unit)
+	}
+	pd.setMaterialized(t)
+	pd.relativeApplied = true
+	return true
+}
+
 // parseBareTimezoneInto matches a standalone timezone string like "UTC",
 // "EST", "Z", "Asia/Tokyo". PHP reports is_localtime=true plus the
 // appropriate zone_type, and no date or time components. Unknown alphabetic

@@ -230,6 +230,12 @@ func dispatchStrToTime(str string, now time.Time, loc *time.Location, opts []Opt
 		return true
 	}
 	if isCompoundExpression(str) {
+		// Try to parse purely-relative compounds (e.g. "-1 week +2 days")
+		// by accumulating into the Relative block without collapsing to an
+		// absolute time.
+		if parseCompoundRelativeInto(str, now, loc, opts, pd) {
+			return true
+		}
 		if t, err := parseCompoundExpression(str, now, opts); err == nil {
 			pd.SetDate(t.Year(), int(t.Month()), t.Day())
 			pd.SetTime(t.Hour(), t.Minute(), t.Second())
