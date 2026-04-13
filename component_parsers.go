@@ -756,7 +756,8 @@ func recordISO8601TZ(tzStr string, pd *ParsedDate, t time.Time) {
 	}
 }
 
-// computeOffsetSeconds parses "+HH[:]MM" / "-HHMM" / "Z" into an offset in seconds.
+// computeOffsetSeconds parses "+HH[:MM]" / "-HHMM" / "+H:MM" / "Z" into an
+// offset in seconds.
 func computeOffsetSeconds(s string) int {
 	s = strings.TrimSpace(s)
 	if s == "z" || s == "Z" {
@@ -775,16 +776,34 @@ func computeOffsetSeconds(s string) int {
 		return 0
 	}
 	body := s[1:]
-	body = strings.ReplaceAll(body, ":", "")
-	if len(body) < 2 {
-		return 0
+	// Extended ±HH:MM:SS
+	if len(body) == 8 && body[2] == ':' && body[5] == ':' {
+		h, _ := strconv.Atoi(body[:2])
+		m, _ := strconv.Atoi(body[3:5])
+		sec, _ := strconv.Atoi(body[6:])
+		return sign * (h*3600 + m*60 + sec)
 	}
-	h, _ := strconv.Atoi(body[:2])
-	m := 0
-	if len(body) >= 4 {
-		m, _ = strconv.Atoi(body[2:4])
+	// ±H:MM or ±HH:MM
+	if idx := strings.Index(body, ":"); idx == 1 || idx == 2 {
+		h, _ := strconv.Atoi(body[:idx])
+		m, _ := strconv.Atoi(body[idx+1:])
+		return sign * (h*3600 + m*60)
 	}
-	return sign * (h*3600 + m*60)
+	// Compact ±HHMM or ±HH
+	if len(body) >= 4 && isAllDigits(body[:4]) {
+		h, _ := strconv.Atoi(body[:2])
+		m, _ := strconv.Atoi(body[2:4])
+		return sign * (h*3600 + m*60)
+	}
+	if len(body) >= 2 && isAllDigits(body[:2]) {
+		h, _ := strconv.Atoi(body[:2])
+		return sign * h * 3600
+	}
+	if len(body) >= 1 && body[0] >= '0' && body[0] <= '9' {
+		h := int(body[0] - '0')
+		return sign * h * 3600
+	}
+	return 0
 }
 
 func parseDateTimeFormatInto(str string, now time.Time, loc *time.Location, opts []Option, pd *ParsedDate) bool {
@@ -840,7 +859,13 @@ func parseWithTimezoneInto(str string, now time.Time, loc *time.Location, opts [
 	} else if t.Hour() != 0 || t.Minute() != 0 || t.Second() != 0 {
 		pd.SetTime(t.Hour(), t.Minute(), t.Second())
 	}
-	if t.Location() != loc {
+	if tzStr, ok := lastFieldLooksLikeTZ(str); ok {
+		if tzStr[0] == '+' || tzStr[0] == '-' {
+			pd.SetTZOffset(t.Location(), computeOffsetSeconds(tzStr))
+		} else if resolved, found := tryParseTimezone(tzStr); found {
+			setTZFromName(pd, tzStr, resolved)
+		}
+	} else if t.Location() != loc {
 		setTZFromLocation(pd, t.Location(), t)
 	}
 	pd.setMaterialized(t)
@@ -1128,7 +1153,16 @@ func parseDayMonthYearInto(str string, now time.Time, loc *time.Location, opts [
 	if !ok {
 		return false
 	}
-	pd.SetDate(t.Year(), int(t.Month()), t.Day())
+	// Recover the ORIGINAL parsed date (without the weekday-mismatch
+	// advance that parseDayMonthYear applies for StrToTime). PHP reports
+	// the unadvanced date plus relative.weekday.
+	origYear, origMonth, origDay := t.Year(), int(t.Month()), t.Day()
+	if stripped {
+		if y, m, d, found := extractDMYFromFields(str); found {
+			origYear, origMonth, origDay = y, m, d
+		}
+	}
+	pd.SetDate(origYear, origMonth, origDay)
 	// Time is recorded whenever a time portion was present. Detect via ":"
 	// in the input (post-weekday-prefix, after stripping the date fields).
 	if strings.Contains(str, ":") {
@@ -1157,6 +1191,44 @@ func parseDayMonthYearInto(str string, now time.Time, loc *time.Location, opts [
 	}
 	pd.setMaterialized(t)
 	return true
+}
+
+// extractDMYFromFields pulls a day/month/year triple from a "weekday[,] <day> <Mon> <year> …"
+// or hyphenated "<day>-<Mon>-<year>" input. Returns false if the layout
+// doesn't match what parseDayMonthYear would have recognised.
+func extractDMYFromFields(str string) (year, month, day int, ok bool) {
+	rest, _, stripped := stripWeekdayPrefix(str)
+	if !stripped {
+		rest = str
+	}
+	fields := strings.Fields(rest)
+	if len(fields) < 3 {
+		return 0, 0, 0, false
+	}
+	// Hyphenated date in first field: "24-Jan-2019".
+	if strings.Contains(fields[0], "-") {
+		parts := strings.SplitN(fields[0], "-", 3)
+		if len(parts) == 3 {
+			fields = append(parts, fields[1:]...)
+		}
+	}
+	dayStr := stripOrdinalSuffix(fields[0])
+	d, err := strconv.Atoi(dayStr)
+	if err != nil || d < 1 || d > 31 {
+		return 0, 0, 0, false
+	}
+	m, isMonth := getMonthByNameFlex(fields[1])
+	if !isMonth {
+		return 0, 0, 0, false
+	}
+	y, err := strconv.Atoi(fields[2])
+	if err != nil || y < 0 {
+		return 0, 0, 0, false
+	}
+	if y < 100 {
+		y = parseTwoDigitYear(y)
+	}
+	return y, int(m), d, true
 }
 
 // lastFieldLooksLikeTZ returns the last whitespace-separated field if it

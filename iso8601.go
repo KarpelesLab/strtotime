@@ -250,6 +250,16 @@ func parseNumericTimezoneOffset(s string) (*time.Location, int, bool) {
 		}
 	}
 
+	// Try +H:MM or -H:MM (single-digit hour).
+	if len(rest) >= 4 && rest[1] == ':' && rest[0] >= '0' && rest[0] <= '9' && isAllDigits(rest[2:4]) {
+		h := int(rest[0] - '0')
+		m, _ := strconv.Atoi(rest[2:4])
+		if h <= 9 && m <= 59 {
+			offset := sign * (h*3600 + m*60)
+			return fixedZone(offset), 5, true
+		}
+	}
+
 	// Try +HH:M or -HH:M (shortened single-digit minute, bug74173)
 	if len(rest) >= 4 && rest[2] == ':' && isAllDigits(rest[:2]) && rest[3] >= '0' && rest[3] <= '9' &&
 		(len(rest) == 4 || rest[4] < '0' || rest[4] > '9') {
