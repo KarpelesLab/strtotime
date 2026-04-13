@@ -1379,28 +1379,52 @@ func parseDateWithRelativeTimeInto(str string, now time.Time, loc *time.Location
 }
 
 func tryWeekdayPrefixReparseInto(str string, now time.Time, loc *time.Location, opts []Option, pd *ParsedDate) bool {
-	// Peek at the weekday prefix before delegating, so we can record the
-	// matching weekday in the relative block (PHP reports Thu/Fri/Sun as
-	// weekday indexes on RFC2822-ish inputs).
-	_, dayNum, stripped := stripWeekdayPrefix(str)
-
-	t, ok := tryWeekdayPrefixReparse(str, now, loc, opts)
-	if !ok {
+	rest, dayNum, stripped := stripWeekdayPrefix(str)
+	if !stripped {
 		return false
 	}
-	pd.SetDate(t.Year(), int(t.Month()), t.Day())
-	// Always record time when a weekday prefix was present (PHP includes
-	// hour/minute/second=0 even when the input omitted the time).
-	if stripped {
-		pd.SetTime(t.Hour(), t.Minute(), t.Second())
-	} else if t.Hour() != 0 || t.Minute() != 0 || t.Second() != 0 {
-		pd.SetTime(t.Hour(), t.Minute(), t.Second())
+	restTrimmed := strings.TrimSpace(rest)
+	switch {
+	case strings.HasPrefix(restTrimmed, "next "),
+		strings.HasPrefix(restTrimmed, "last "),
+		strings.HasPrefix(restTrimmed, "this "):
+		return false
 	}
-	if stripped && dayNum >= 0 {
+	switch restTrimmed {
+	case "noon", "midnight", "tomorrow", "yesterday", "today", "now":
+		return false
+	}
+	if restLooksLikeBareTime(restTrimmed) {
+		return false
+	}
+	// Parse the rest into a fresh ParsedDate so we can observe exactly what
+	// it contributed (year/month/day/hour/.../tz) and avoid PHP-incompatible
+	// weekday advancement.
+	sub := newParsedDate()
+	reparseOpts := append([]Option(nil), opts...)
+	reparseOpts = append(reparseOpts, InTZ(loc))
+	if !dispatchStrToTime(restTrimmed, now, loc, reparseOpts, sub) {
+		return false
+	}
+	if sub.ErrorCount > 0 {
+		return false
+	}
+	copyComponents(pd, sub)
+	if !sub.Hour.Set {
+		pd.SetTime(0, 0, 0)
+	}
+	if dayNum >= 0 {
 		pd.SetRelativeWeekday(dayNum)
 	}
-	if t.Location() != loc {
-		setTZFromLocation(pd, t.Location(), t)
+	// Materialize for StrToTime: advance to the next matching weekday when
+	// the parsed absolute date doesn't already fall on that weekday.
+	t, err := sub.Materialize(now, loc)
+	if err == nil && dayNum >= 0 && int(t.Weekday()) != dayNum {
+		daysUntil := (dayNum - int(t.Weekday()) + 7) % 7
+		if daysUntil == 0 {
+			daysUntil = 7
+		}
+		t = t.AddDate(0, 0, daysUntil)
 	}
 	pd.setMaterialized(t)
 	return true

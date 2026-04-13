@@ -507,12 +507,16 @@ func (p *Parser) tryParseTimezone() bool {
 		p.tzFound = true
 		p.position++
 		p.result = p.result.In(p.loc)
+		if p.pd != nil {
+			setTZFromName(p.pd, tzString, loc)
+		}
 		return true
 	}
 
 	// Try extending with / and - to build timezone paths like
 	// America/New_York, America/Argentina/Buenos_Aires, America/Port-au-Prince
 	var bestLoc *time.Location
+	var bestName string
 	bestPos := -1
 
 	pos := p.position + 1
@@ -530,6 +534,7 @@ func (p *Parser) tryParseTimezone() bool {
 
 		if loc, found := tryParseTimezone(tzString); found {
 			bestLoc = loc
+			bestName = tzString
 			bestPos = pos
 		}
 	}
@@ -539,6 +544,9 @@ func (p *Parser) tryParseTimezone() bool {
 		p.tzFound = true
 		p.position = bestPos
 		p.result = p.result.In(p.loc)
+		if p.pd != nil {
+			setTZFromName(p.pd, bestName, bestLoc)
+		}
 		return true
 	}
 
@@ -554,6 +562,9 @@ func (p *Parser) tryParseTimezone() bool {
 			p.tzFound = true
 			p.position += 3
 			p.result = p.result.In(p.loc)
+			if p.pd != nil {
+				setTZFromName(p.pd, tzString, loc)
+			}
 			return true
 		}
 	}

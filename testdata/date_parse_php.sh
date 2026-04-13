@@ -219,6 +219,12 @@ nope
 2359
 2400
 9999
+Monday 2023-01-01
+Friday tomorrow
+yesterday Monday
+tomorrow noon EST
+noon UTC
+midnight GMT
 12:00 PM
 12:00 AM
 12:30 AM
