@@ -220,6 +220,14 @@ nope
 2400
 9999
 Monday 2023-01-01
+2020-366
+2020-001
+2024-366
+2023-365
+2020-060
+2020-100
+2023-01-01 +3 days 10:00:00
+2023-01-01 10:00:00 +3 days
 Friday tomorrow
 yesterday Monday
 tomorrow noon EST

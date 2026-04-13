@@ -696,12 +696,29 @@ func parseYearMonthFormatInto(str string, now time.Time, loc *time.Location, opt
 	if len(str) == 0 || str[0] < '0' || str[0] > '9' {
 		return false
 	}
+	// Detect ISO ordinal date form "YYYY-DDD" so we can report PHP's shape:
+	// year/month=1/day=DoY (not the resolved month/day) plus a warning when
+	// DoY exceeds 365 / 366.
+	parts := strings.SplitN(str, "-", 2)
+	if len(parts) == 2 && len(parts[1]) == 3 && isAllDigits(parts[0]) && isAllDigits(parts[1]) {
+		year, _ := strconv.Atoi(parts[0])
+		doy, _ := strconv.Atoi(parts[1])
+		if doy >= 1 {
+			pd.SetDate(year, 1, doy)
+			// PHP treats the 3-digit form as (year, month=1, day=DDD) and
+			// emits a warning when the day value exceeds 31 (invalid day
+			// for January).
+			if doy > 31 {
+				pd.AddWarning(len(str)+1, "The parsed date was invalid")
+			}
+			pd.setMaterialized(time.Date(year, 1, 1, 0, 0, 0, 0, loc).AddDate(0, 0, doy-1))
+			return true
+		}
+	}
 	t, ok := parseYearMonthFormat(str, loc)
 	if !ok {
 		return false
 	}
-	// PHP emits day=1 for YYYY-MM, and year/month/day all set for the
-	// ISO ordinal YYYY-DDD form.
 	pd.SetDate(t.Year(), int(t.Month()), t.Day())
 	pd.setMaterialized(t)
 	return true
@@ -1366,15 +1383,69 @@ func parseKeywordInto(str string, now time.Time, loc *time.Location, pd *ParsedD
 }
 
 func parseDateWithRelativeTimeInto(str string, now time.Time, loc *time.Location, opts []Option, pd *ParsedDate) bool {
-	t, ok := parseDateWithRelativeTime(str, now, loc, opts)
+	datePart, rest, ok := splitDateAndRest(str)
 	if !ok {
 		return false
 	}
-	pd.SetDate(t.Year(), int(t.Month()), t.Day())
-	if t.Hour() != 0 || t.Minute() != 0 || t.Second() != 0 {
-		pd.SetTime(t.Hour(), t.Minute(), t.Second())
+	// Parse date portion into a fresh pd so we capture the un-advanced
+	// year/month/day that PHP reports.
+	dateSub := newParsedDate()
+	dateOpts := append([]Option(nil), opts...)
+	dateOpts = append(dateOpts, InTZ(loc))
+	if !dispatchStrToTime(datePart, now, loc, dateOpts, dateSub) || dateSub.ErrorCount > 0 {
+		return false
 	}
-	pd.setMaterialized(t)
+	dateResult, err := dateSub.Materialize(now, loc)
+	if err != nil {
+		return false
+	}
+	// Parse the remainder anchored at the parsed date so any resulting
+	// absolute time we observe is relative to the original date.
+	restSub := newParsedDate()
+	restOpts := append([]Option(nil), opts...)
+	restOpts = append(restOpts, Rel(dateResult), InTZ(loc))
+	if !dispatchStrToTime(rest, dateResult, loc, restOpts, restSub) || restSub.ErrorCount > 0 {
+		return false
+	}
+
+	copyComponents(pd, dateSub)
+	if restSub.Hour.Set {
+		pd.SetTime(restSub.Hour.V, restSub.Minute.V, restSub.Second.V)
+	}
+	if restSub.Fraction.Set {
+		pd.SetFraction(restSub.Fraction.V)
+	}
+	if restSub.fractionDefaultsZero {
+		pd.fractionDefaultsZero = true
+	}
+	if restSub.IsLocaltime && !pd.IsLocaltime {
+		pd.IsLocaltime = restSub.IsLocaltime
+		pd.ZoneType = restSub.ZoneType
+		pd.Zone = restSub.Zone
+		pd.IsDST = restSub.IsDST
+		pd.TzAbbr = restSub.TzAbbr
+		pd.TzID = restSub.TzID
+		pd.sourceLoc = restSub.sourceLoc
+	}
+	if restSub.Relative != nil {
+		if pd.Relative == nil {
+			pd.Relative = restSub.Relative
+		} else {
+			pd.Relative.Year += restSub.Relative.Year
+			pd.Relative.Month += restSub.Relative.Month
+			pd.Relative.Day += restSub.Relative.Day
+			pd.Relative.Hour += restSub.Relative.Hour
+			pd.Relative.Minute += restSub.Relative.Minute
+			pd.Relative.Second += restSub.Relative.Second
+			if restSub.Relative.Weekday.Set {
+				pd.Relative.Weekday = restSub.Relative.Weekday
+			}
+		}
+	}
+	// StrToTime still wants the final (relative-applied) materialized time.
+	finalT, _ := restSub.Materialize(dateResult, loc)
+	pd.setMaterialized(finalT)
+	pd.relativeApplied = true
 	return true
 }
 
