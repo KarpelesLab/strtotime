@@ -227,7 +227,9 @@ func parseTimeWithNamedTZInto(str string, now time.Time, loc *time.Location, opt
 
 // parseBareTimezoneInto matches a standalone timezone string like "UTC",
 // "EST", "Z", "Asia/Tokyo". PHP reports is_localtime=true plus the
-// appropriate zone_type, and no date or time components.
+// appropriate zone_type, and no date or time components. Unknown alphabetic
+// tokens (e.g. "YYYY", "foo") are reported with is_localtime=true,
+// zone_type=0, and an error "The timezone could not be found in the database".
 func parseBareTimezoneInto(str string, now time.Time, loc *time.Location, opts []Option, pd *ParsedDate) bool {
 	s := strings.TrimSpace(str)
 	if strings.ContainsAny(s, " \t") {
@@ -245,12 +247,33 @@ func parseBareTimezoneInto(str string, now time.Time, loc *time.Location, opts [
 		pd.setMaterialized(now.In(time.UTC))
 		return true
 	}
-	resolved, found := tryParseTimezone(s)
-	if !found {
+	if resolved, found := tryParseTimezone(s); found {
+		setTZFromName(pd, s, resolved)
+		pd.setMaterialized(now.In(resolved))
+		return true
+	}
+	// Unknown — PHP emits a zone_type 0 placeholder plus a TZ lookup error.
+	// Only match if the input isn't a recognized month, weekday, or known
+	// keyword — those have their own handlers.
+	lower := strings.ToLower(s)
+	if _, ok := getMonthByNameFlex(lower); ok {
 		return false
 	}
-	setTZFromName(pd, s, resolved)
-	pd.setMaterialized(now.In(resolved))
+	if getDayOfWeek(lower) >= 0 {
+		return false
+	}
+	switch lower {
+	case "noon", "midnight", "tomorrow", "yesterday", "today", "now",
+		"am", "pm", "next", "last", "this", "first", "third",
+		"fourth", "fifth", "sixth", "seventh", "eighth", "ninth", "tenth",
+		"ago", "of", "day", "week", "month", "year", "hour", "minute",
+		"second", "days", "weeks", "months", "years", "hours", "minutes",
+		"seconds":
+		return false
+	}
+	pd.IsLocaltime = true
+	pd.ZoneType = 0
+	pd.AddError(0, "The timezone could not be found in the database")
 	return true
 }
 
@@ -1449,6 +1472,9 @@ func copyComponents(dst, src *ParsedDate) {
 	}
 	for pos, msg := range src.Errors {
 		dst.AddError(pos, msg)
+	}
+	if src.fractionDefaultsZero {
+		dst.fractionDefaultsZero = true
 	}
 }
 

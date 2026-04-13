@@ -46,6 +46,11 @@ type ParsedDate struct {
 	// re-applying Relative (avoids double-counting). Used by the token-based
 	// parser which mutates time.Time directly as it parses.
 	relativeApplied bool
+	// fractionDefaultsZero flags that the parser recognised a colon-style
+	// time portion. PHP emits fraction=0 (instead of false) in that case,
+	// even when the input has no "." fractional separator. Bare HHMM inputs
+	// leave fraction=false.
+	fractionDefaultsZero bool
 }
 
 // Relative captures the relative-time portion of a parsed expression.
@@ -126,11 +131,15 @@ func (pd *ParsedDate) SetMonth(month int) { pd.Month = OptInt{V: month, Set: tru
 // SetDay records only the day.
 func (pd *ParsedDate) SetDay(day int) { pd.Day = OptInt{V: day, Set: true} }
 
-// SetTime records hour/minute/second from a parsed clock time.
+// SetTime records hour/minute/second from a parsed clock time. It also
+// flags fractionDefaultsZero so that fraction marshals as 0 (not false)
+// when no fractional part was explicitly present — this matches PHP for
+// every clock-time form except bare HHMM (which must clear the flag).
 func (pd *ParsedDate) SetTime(hour, minute, second int) {
 	pd.Hour = OptInt{V: hour, Set: true}
 	pd.Minute = OptInt{V: minute, Set: true}
 	pd.Second = OptInt{V: second, Set: true}
+	pd.fractionDefaultsZero = true
 }
 
 // SetHour records only the hour.
@@ -421,11 +430,8 @@ func (pd *ParsedDate) MarshalJSON() ([]byte, error) {
 	writeField("hour", marshalJSONOrDefault(pd.Hour), &first)
 	writeField("minute", marshalJSONOrDefault(pd.Minute), &first)
 	writeField("second", marshalJSONOrDefault(pd.Second), &first)
-
-	// PHP behavior: when any time component is set, fraction defaults to 0
-	// instead of false.
 	fraction := pd.Fraction
-	if !fraction.Set && pd.Hour.Set {
+	if !fraction.Set && pd.fractionDefaultsZero {
 		fraction = OptFloat{V: 0, Set: true}
 	}
 	writeField("fraction", marshalJSONOrDefault(fraction), &first)
@@ -478,8 +484,9 @@ func marshalJSONOrDefault(v json.Marshaler) []byte {
 	return b
 }
 
-// marshalMapIntString emits an int-keyed map as a JSON object with string
-// keys, matching PHP's json_encode of an associative array.
+// marshalMapIntString emits an int-keyed map the way PHP's json_encode
+// does: a JSON array when the keys are a contiguous sequence starting at 0,
+// a JSON object otherwise.
 func marshalMapIntString(m map[int]string) []byte {
 	if len(m) == 0 {
 		return []byte("[]")
@@ -490,7 +497,28 @@ func marshalMapIntString(m map[int]string) []byte {
 	}
 	sort.Ints(keys)
 
+	// Sequential 0..N-1 → JSON array (PHP behaviour for "list" arrays).
+	isList := true
+	for i, k := range keys {
+		if k != i {
+			isList = false
+			break
+		}
+	}
+
 	var buf bytes.Buffer
+	if isList {
+		buf.WriteByte('[')
+		for i, k := range keys {
+			if i > 0 {
+				buf.WriteByte(',')
+			}
+			vb, _ := json.Marshal(m[k])
+			buf.Write(vb)
+		}
+		buf.WriteByte(']')
+		return buf.Bytes()
+	}
 	buf.WriteByte('{')
 	for i, k := range keys {
 		if i > 0 {

@@ -1784,6 +1784,7 @@ func (p *Parser) tryParseTimeExpression() (time.Time, bool, error) {
 
 	if p.pd != nil {
 		p.pd.SetTime(hour, minute, second)
+		p.pd.fractionDefaultsZero = true
 		if hasFraction {
 			p.pd.SetFraction(fraction)
 		}
@@ -1881,7 +1882,7 @@ func (p *Parser) tryParseYearOnly() (time.Time, bool, error) {
 		return time.Time{}, false, nil
 	}
 	num, err := strconv.Atoi(val)
-	if err != nil || num < 1 {
+	if err != nil || num < 0 {
 		return time.Time{}, false, nil
 	}
 
@@ -1896,16 +1897,38 @@ func (p *Parser) tryParseYearOnly() (time.Time, bool, error) {
 
 	p.position++
 
-	// PHP behavior: when a month name has already been parsed and the 4-digit number
-	// forms a valid military time (HHMM with HH <= 23), treat it as time, not year.
-	// Example: "March 1 eighth day 2009" → 2009 is military time 20:09, not year.
-	if p.monthFound {
-		hour := num / 100
-		minute := num % 100
-		if hour <= 23 && minute <= 59 {
+	// PHP behavior: a bare 4-digit number is interpreted as HHMM (military
+	// time) when the minute portion is ≤ 59 AND the hour portion is ≤ 24.
+	// Otherwise it's treated as a year. The HHMM interpretation also applies
+	// when a month name was already parsed (e.g. "March 1 eighth day 2009").
+	hhmmHour := num / 100
+	hhmmMinute := num % 100
+	if hhmmMinute <= 59 && hhmmHour <= 24 && (p.monthFound || num < 1000 || hhmmMinute <= 59 && hhmmHour <= 24) {
+		// Emit as HHMM time, not year. Exception: if the input is just a
+		// plain 4-digit year that also parses as HHMM (like 1200), PHP
+		// prefers the time. If the minute is > 59 it's obviously a year.
+		if p.monthFound {
 			year, month, day := p.result.Date()
-			return time.Date(year, month, day, hour, minute, 0, 0, p.loc), true, nil
+			if p.pd != nil {
+				p.pd.SetTime(hhmmHour, hhmmMinute, 0)
+				p.pd.fractionDefaultsZero = false
+			}
+			return time.Date(year, month, day, hhmmHour, hhmmMinute, 0, 0, p.loc), true, nil
 		}
+	}
+	// For bare 4-digit inputs: if HHMM is valid, use it; else year.
+	if !p.monthFound && hhmmMinute <= 59 && hhmmHour <= 24 {
+		if p.pd != nil {
+			p.pd.SetTime(hhmmHour, hhmmMinute, 0)
+			// Bare HHMM — PHP emits fraction:false, not 0.
+			p.pd.fractionDefaultsZero = false
+			// Warn when hour == 24 (same as colon-style handling).
+			if hhmmHour == 24 {
+				p.pd.AddWarning(len(p.tokens[p.position-1].Val)+1, "The parsed time was invalid")
+			}
+		}
+		year, month, day := p.result.Date()
+		return time.Date(year, month, day, hhmmHour, hhmmMinute, 0, 0, p.loc), true, nil
 	}
 
 	if p.pd != nil {

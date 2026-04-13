@@ -208,6 +208,17 @@ monday 10am
 noon Monday
 10:00 tomorrow
 Monday noon
+YYYY
+foo
+nope
+2023
+1234
+1200
+0000
+0030
+2359
+2400
+9999
 12:00 PM
 12:00 AM
 12:30 AM
