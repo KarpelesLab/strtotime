@@ -18,9 +18,15 @@ import (
 // reported verbatim in the "relative" block.
 func DateParse(str string) *ParsedDate {
 	pd := newParsedDate()
-	str = strings.ToLower(strings.TrimSpace(str))
+	// PHP's timelib emits "Empty string" only for a literal zero-length input.
+	// Whitespace-only inputs are trimmed and then parsed further, which means
+	// they return a structurally-empty result with no error (bug35499).
 	if str == "" {
 		pd.AddError(0, "Empty string")
+		return pd
+	}
+	str = strings.ToLower(strings.TrimSpace(str))
+	if str == "" {
 		return pd
 	}
 

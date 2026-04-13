@@ -29,6 +29,7 @@ var formatParsers = []componentParser{
 	parseWithTimezoneInto,
 	wrapDateOnly(parseISOFormat),
 	guardDigit(parseInvalidISOFormatInto),
+	guardDigit(parseInvalidDottedDateInto),
 	parseInvalidMonthNameDateInto,
 	guardDigit(parseLargeYearAsTimeInto),
 	parseYearMonthFormatInto,
@@ -177,6 +178,77 @@ func parseInvalidISOFormatInto(str string, now time.Time, loc *time.Location, op
 	// returns a time.Time (matches the original behaviour before this
 	// refactor when validation was not enforced).
 	pd.setMaterialized(time.Date(y, time.Month(m), d, 0, 0, 0, 0, loc))
+	return true
+}
+
+// parseInvalidDottedDateInto catches "DD.MM.YYYY" inputs whose components are
+// out of range (e.g. "00.00.0000"), optionally followed by " [- ]HH:MM:SS".
+// PHP's date_parse reports the literal components, a warning "The parsed date
+// was invalid" at the end, and an "Unexpected character" error for the "-"
+// separator when one is present (bug41709).
+func parseInvalidDottedDateInto(str string, now time.Time, loc *time.Location, opts []Option, pd *ParsedDate) bool {
+	// Find the "DD.MM.YYYY" prefix.
+	datePart, rest := str, ""
+	if sp := strings.IndexByte(str, ' '); sp >= 0 {
+		datePart = str[:sp]
+		rest = str[sp:]
+	}
+	if strings.Count(datePart, ".") != 2 {
+		return false
+	}
+	parts := strings.Split(datePart, ".")
+	if len(parts) != 3 {
+		return false
+	}
+	for _, p := range parts {
+		if !isAllDigits(p) || len(p) == 0 {
+			return false
+		}
+	}
+	if len(parts[2]) < 4 {
+		return false
+	}
+	d, _ := strconv.Atoi(parts[0])
+	m, _ := strconv.Atoi(parts[1])
+	y, _ := strconv.Atoi(parts[2])
+	if IsValidDate(y, m, d) {
+		return false
+	}
+	if m < 0 || m > 12 || d < 0 || d > 31 {
+		return false
+	}
+
+	pd.SetDate(y, m, d)
+
+	// Optional trailing time, possibly with a "-" separator.
+	hasTime := false
+	var hour, minute, second, nanos int
+	if trimmed := strings.TrimLeft(rest, " \t"); trimmed != "" {
+		leading := len(rest) - len(trimmed)
+		// Record "Unexpected character" error when a '-' separates date and time.
+		if len(trimmed) > 0 && trimmed[0] == '-' {
+			dashPos := len(datePart) + leading
+			pd.AddError(dashPos, "Unexpected character")
+			trimmed = strings.TrimLeft(trimmed[1:], " \t")
+		}
+		if trimmed != "" {
+			h, mm, s, n, consumed, ok := parseISO8601Time(trimmed)
+			if !ok || strings.TrimSpace(trimmed[consumed:]) != "" {
+				return false
+			}
+			hour, minute, second, nanos = h, mm, s, n
+			hasTime = true
+		}
+	}
+
+	if hasTime {
+		pd.SetTime(hour, minute, second)
+		if nanos != 0 {
+			pd.SetFraction(float64(nanos) / 1e9)
+		}
+	}
+	pd.AddWarning(len(str)+1, "The parsed date was invalid")
+	pd.setMaterialized(time.Date(y, time.Month(m), d, hour, minute, second, nanos, loc))
 	return true
 }
 
@@ -600,12 +672,33 @@ func splitTimeAndNumericTZ(str string) (timePart, tzPart string, ok bool) {
 // --- Into adapters (each wraps a specific legacy parser) ---
 
 func parseZeroDateInto(str string, now time.Time, loc *time.Location, opts []Option, pd *ParsedDate) bool {
-	t, ok := parseZeroDate(str, loc)
-	if !ok {
+	if !strings.HasPrefix(str, "0000-00-00") {
 		return false
 	}
-	pd.SetDate(t.Year(), int(t.Month()), t.Day())
-	pd.setMaterialized(t)
+	rest := strings.TrimSpace(str[len("0000-00-00"):])
+	hasTime := false
+	var hour, minute, second, nanos int
+	if rest != "" {
+		h, m, s, n, consumed, ok := parseISO8601Time(rest)
+		if !ok || strings.TrimSpace(rest[consumed:]) != "" {
+			return false
+		}
+		hour, minute, second, nanos = h, m, s, n
+		hasTime = true
+	}
+	// PHP's date_parse reports the literal components (year=0, month=0,
+	// day=0) plus a warning "The parsed date was invalid" at len(str)+1.
+	// StrToTime still needs a materialized time: Go normalizes year/month/day
+	// 0 to -0001-11-30, matching PHP's underlying behaviour.
+	pd.SetDate(0, 0, 0)
+	if hasTime {
+		pd.SetTime(hour, minute, second)
+		if nanos != 0 {
+			pd.SetFraction(float64(nanos) / 1e9)
+		}
+	}
+	pd.AddWarning(len(str)+1, "The parsed date was invalid")
+	pd.setMaterialized(time.Date(0, 0, 0, hour, minute, second, nanos, loc))
 	return true
 }
 
@@ -811,8 +904,39 @@ func parseDateTimeFormatInto(str string, now time.Time, loc *time.Location, opts
 	if !ok {
 		return false
 	}
-	pd.SetDate(t.Year(), int(t.Month()), t.Day())
-	pd.SetTime(t.Hour(), t.Minute(), t.Second())
+	// Recover the literal hour/minute/second/date from the source string so
+	// hour==24 is preserved verbatim (PHP's date_parse emits hour=24 plus a
+	// warning; time.Date has already wrapped it into the next day).
+	litYear, litMonth, litDay := t.Year(), int(t.Month()), t.Day()
+	litHour, litMinute, litSecond := t.Hour(), t.Minute(), t.Second()
+	hour24 := false
+	if spaceIdx := strings.IndexByte(str, ' '); spaceIdx > 0 {
+		rest := strings.TrimSpace(str[spaceIdx+1:])
+		restLower := strings.ToLower(rest)
+		if strings.HasSuffix(restLower, "a.m.") || strings.HasSuffix(restLower, "p.m.") {
+			rest = strings.TrimSpace(rest[:len(rest)-4])
+		} else if strings.HasSuffix(restLower, "am") || strings.HasSuffix(restLower, "pm") {
+			rest = strings.TrimSpace(rest[:len(rest)-2])
+		} else if upperRest := strings.ToUpper(rest); strings.HasSuffix(upperRest, " AM") || strings.HasSuffix(upperRest, " PM") {
+			rest = strings.TrimSpace(rest[:len(rest)-3])
+		}
+		if h, m, s, _, _, ok := parseISO8601Time(rest); ok && h == 24 {
+			litHour, litMinute, litSecond = h, m, s
+			hour24 = true
+			// Date part is the segment before the space — it wasn't wrapped.
+			datePart := str[:spaceIdx]
+			if dt, dok := parseISOFormat(datePart, loc); dok {
+				litYear, litMonth, litDay = dt.Year(), int(dt.Month()), dt.Day()
+			} else if dt, dok := parseMonthNameFormat(datePart, loc); dok {
+				litYear, litMonth, litDay = dt.Year(), int(dt.Month()), dt.Day()
+			}
+		}
+	}
+	pd.SetDate(litYear, litMonth, litDay)
+	pd.SetTime(litHour, litMinute, litSecond)
+	if hour24 {
+		pd.AddWarning(len(str)+1, "The parsed time was invalid")
+	}
 	if t.Nanosecond() != 0 {
 		pd.SetFraction(float64(t.Nanosecond()) / 1e9)
 	}
