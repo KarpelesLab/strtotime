@@ -470,4 +470,61 @@ Mon 15 Jan 2023
 Mon Jan 15 2023 14:30:45 UTC
 Monday 15-Jan-2023
 Monday 15 Jan 23
+2023-01-15 14:30:45.999999 +09:00
+2023-01-15 14:30:45.999999 America/New_York
+2023-01-15 14:30:45 +5:30
+January 1, 2023
+December 31, 1999
+Feb 14, 2024
+March 10, 2020 15:45
+October 31, 2023 23:59:59
+15 January 2023
+1 February 2024
+25 December 2023
+2 January
+15 Jan
+10:00:00.5
+10:00:00.5 UTC
+10:00:00.000001
+10:00:00.500
+0:00:00
+01:01:01
+23:00
+08:00 EST
+08:00 +0900
+08:00 -0500
+@0 GMT
+@1 GMT
+@1000 GMT
+@1000 UTC
+@86400
+1st Friday of March 2024
+2nd Saturday of April 2024
+3rd Sunday of May 2024
+4th Monday of June 2024
+last Tuesday of December 2024
+tomorrow 5am
+Jan 15 at 10:00
+Monday at 10am
+10am on Monday
+midnight on Monday
+noon on Sunday
+yesterday 3pm
+next Monday 10am
+last Friday 5pm
++1 second
+-1 second
+1 second
+1 hour
+-1 hour
+1 minute
+-1 minute
+1 day
+-1 day
+1 week
+-1 week
+1 month
+-1 month
+1 year
+-1 year
 EOF

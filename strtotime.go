@@ -476,6 +476,16 @@ func (p *Parser) Parse() (time.Time, error) {
 			currentToken := p.tokens[p.position]
 			p.position++
 			if currentToken.Typ != TypeWhitespace {
+				// PHP quirk: the filler words "at"/"on" inside an otherwise
+				// valid expression are reported as unknown-TZ errors, not
+				// per-character unexpected characters.
+				lower := strings.ToLower(currentToken.Val)
+				if (lower == "at" || lower == "on") && p.pd != nil {
+					p.pd.IsLocaltime = true
+					p.pd.ZoneType = 0
+					p.pd.AddError(currentToken.Pos, "The timezone could not be found in the database")
+					continue
+				}
 				if p.pd != nil {
 					// PHP-compatible: one "Unexpected character" per byte.
 					for i := range currentToken.Val {
