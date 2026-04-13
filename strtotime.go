@@ -259,7 +259,11 @@ func dispatchStrToTime(str string, now time.Time, loc *time.Location, opts []Opt
 	}
 	result, err := parser.Parse()
 	if err != nil {
-		pd.AddError(0, err.Error())
+		// The parser may have populated per-character errors already;
+		// only emit a fallback if nothing was recorded.
+		if pd.ErrorCount == 0 {
+			pd.AddError(0, err.Error())
+		}
 		return false
 	}
 	// Token parser mutates p.result in place, so the returned time already
@@ -472,6 +476,12 @@ func (p *Parser) Parse() (time.Time, error) {
 			currentToken := p.tokens[p.position]
 			p.position++
 			if currentToken.Typ != TypeWhitespace {
+				if p.pd != nil {
+					// PHP-compatible: one "Unexpected character" per byte.
+					for i := range currentToken.Val {
+						p.pd.AddError(currentToken.Pos+i, "Unexpected character")
+					}
+				}
 				return time.Time{}, fmt.Errorf("unexpected token: %s", currentToken.Val)
 			}
 		}
